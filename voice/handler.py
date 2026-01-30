@@ -751,7 +751,7 @@ class VoiceHandler:
     async def _wait_and_return(self, voice_client):
         """Wait for playback to finish and return to Manga_bot channel."""
         while voice_client.is_playing():
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.1)
             
         # Return to Manga_bot channel
         guild = voice_client.guild
