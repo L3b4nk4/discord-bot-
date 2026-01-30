@@ -272,8 +272,7 @@ class VoiceCog(commands.Cog, name="Voice"):
         """Called when bot joins a new server - setup voice."""
         await self._ensure_voice_channel(guild)
         
-        except Exception as e:
-            print(f"❌ Error ensuring voice channel in {guild.name}: {e}")
+
 
     async def _ensure_voice_channel(self, guild):
         """Ensure 'Manga_bot' channel exists and join it."""
