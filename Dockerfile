@@ -21,5 +21,19 @@ COPY . .
 # Expose port
 EXPOSE 7860
 
-# Run the bot
-CMD ["python", "main.py"]
+# Install Cloudflare Tunnel
+RUN curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && \
+  dpkg -i cloudflared.deb && \
+  rm cloudflared.deb
+
+# Create start script
+RUN echo '#!/bin/bash\n\
+  if [ -n "$CLOUDFLARE_TOKEN" ]; then\n\
+  echo "🚀 Starting Cloudflare Tunnel..."\n\
+  cloudflared tunnel run --token $CLOUDFLARE_TOKEN &\n\
+  fi\n\
+  echo "🚀 Starting Bot..."\n\
+  python main.py' > /app/start.sh && chmod +x /app/start.sh
+
+# Run the bot with tunnel support
+CMD ["/app/start.sh"]
