@@ -342,7 +342,16 @@ class VoiceCog(commands.Cog, name="Voice"):
 
         except Exception as e:
             print(f"❌ Error ensuring voice channel in {guild.name}: {e}")
-        """Start the voice enforcement loop."""
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Start the voice enforcement loop and join immediately."""
+        print("🎙️ Startup: Checking voice channels for all guilds...", flush=True)
+        for guild in self.bot.guilds:
+            try:
+                await self._ensure_voice_channel(guild)
+            except Exception as e:
+                print(f"❌ Startup voice error for {guild.name}: {e}", flush=True)
+
         if not hasattr(self, 'enforce_loop_started'):
             self.enforce_loop_started = True
             self.bot.loop.create_task(self._enforce_voice_connection_loop())
@@ -382,7 +391,7 @@ class VoiceCog(commands.Cog, name="Voice"):
                 except Exception as e:
                     print(f"⚠️ Voice loop error for {guild.name}: {e}", flush=True)
             
-            await asyncio.sleep(10)  # Check every 10 seconds
+            await asyncio.sleep(5)  # Check every 5 seconds
 
 
 
