@@ -333,7 +333,7 @@ class VoiceCog(commands.Cog, name="Voice"):
                     print(f"❌ Failed to auto-join in {guild.name}: {e}")
             
             # If connected but in wrong channel, move
-            elif guild.voice_client.channel.id != channel.id:
+            elif guild.voice_client and guild.voice_client.channel and guild.voice_client.channel.id != channel.id:
                 try:
                      await guild.voice_client.move_to(channel)
                      print(f"➡️ Moved to '{channel_name}' in {guild.name}")
@@ -350,18 +350,37 @@ class VoiceCog(commands.Cog, name="Voice"):
     async def _enforce_voice_connection_loop(self):
         """Constantly ensure bot is in 'Manga_bot' channel."""
         await self.bot.wait_until_ready()
-        print("🔄 Voice enforcement loop started")
+        print("🔄 Voice enforcement loop started", flush=True)
         
         while not self.bot.is_closed():
             for guild in self.bot.guilds:
+                # Debug logging
+                # print(f"🔍 [Loop] Checking guild: {guild.name}", flush=True)
+                
                 # Skip if manual disconnect flag is set (user commanded leave)
                 if self.voice.manual_disconnect:
+                    print(f"⚠️ [Loop] Skipping {guild.name} due to MANUAL DISCONNECT flag.", flush=True)
                     continue
                 
                 try:
-                    await self._ensure_voice_channel(guild)
+                    # Check if actually connected
+                    if guild.voice_client and guild.voice_client.is_connected():
+                         # We are connected, but are we in the right channel?
+                         channel_name = "Manga_bot"
+                         if guild.voice_client.channel.name != channel_name:
+                             print(f"⚠️ [Loop] In wrong channel ({guild.voice_client.channel.name}), moving to {channel_name}...", flush=True)
+                             target = discord.utils.get(guild.voice_channels, name=channel_name)
+                             if target:
+                                 await guild.voice_client.move_to(target)
+                         else:
+                             # All good
+                             pass
+                    else:
+                        print(f"⚠️ [Loop] Not connected in {guild.name}, attempting auto-join...", flush=True)
+                        await self._ensure_voice_channel(guild)
+                        
                 except Exception as e:
-                    print(f"⚠️ Voice loop error for {guild.name}: {e}")
+                    print(f"⚠️ Voice loop error for {guild.name}: {e}", flush=True)
             
             await asyncio.sleep(10)  # Check every 10 seconds
 
