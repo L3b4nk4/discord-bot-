@@ -151,13 +151,7 @@ class MangaBot(commands.Bot):
         only_me_user_id = getattr(auth_cog, "only_me_user_id", None) if auth_cog else None
         is_onlyme_allowed = True
         if only_me_user_id is not None:
-            is_owner = False
-            if auth_cog and hasattr(auth_cog, "is_owner"):
-                try:
-                    is_owner = bool(auth_cog.is_owner(message.author.id))
-                except Exception:
-                    is_owner = False
-            is_onlyme_allowed = message.author.id == only_me_user_id or is_owner
+            is_onlyme_allowed = message.author.id == only_me_user_id
 
         # Natural assistant actions are mention-only.
         if mentioned and is_onlyme_allowed:

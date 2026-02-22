@@ -2599,7 +2599,6 @@ class AuthCog(commands.Cog, name="Auth"):
         # 2. Check only_me mode
         if self.only_me_user_id is not None:
             is_lock_owner = ctx.author.id == self.only_me_user_id
-            is_bot_owner = self.is_owner(ctx.author.id)
             is_bot_admin = self.is_admin(ctx.author.id)
             is_server_owner = bool(ctx.guild and ctx.author.id == ctx.guild.owner_id)
 
@@ -2607,7 +2606,7 @@ class AuthCog(commands.Cog, name="Auth"):
             if cmd_name == "openall" and (is_lock_owner or is_bot_admin or is_server_owner):
                 return True
 
-            if not (is_lock_owner or is_bot_owner):
+            if not is_lock_owner:
                 return False
 
         # 3. Check dynamic overrides
@@ -2788,14 +2787,13 @@ def setup_global_check(bot, auth_cog):
         # 1. Check only_me mode
         if auth_cog.only_me_user_id is not None:
             is_lock_owner = ctx.author.id == auth_cog.only_me_user_id
-            is_bot_owner = auth_cog.is_owner(ctx.author.id)
             is_bot_admin = auth_cog.is_admin(ctx.author.id)
             is_server_owner = bool(ctx.guild and ctx.author.id == ctx.guild.owner_id)
 
             if cmd_name == "openall" and (is_lock_owner or is_bot_admin or is_server_owner):
                 return True
 
-            if not (is_lock_owner or is_bot_owner):
+            if not is_lock_owner:
                 return False
         
         # 2. Check blacklist

@@ -635,11 +635,12 @@ class AgentCog(commands.Cog, name="Agent"):
                 overwrites[role] = discord.PermissionOverwrite(view_channel=True)
 
         try:
-            category = await guild.create_category(
-                category_name,
-                overwrites=overwrites,
-                reason=f"AI request by {message.author} ({message.author.id})",
-            )
+            create_kwargs = {
+                "reason": f"AI request by {message.author} ({message.author.id})",
+            }
+            if overwrites is not None:
+                create_kwargs["overwrites"] = overwrites
+            category = await guild.create_category(category_name, **create_kwargs)
         except Exception as e:
             return f"❌ Failed to create category: {e}"
 
@@ -692,12 +693,14 @@ class AgentCog(commands.Cog, name="Agent"):
                 )
 
         try:
-            channel = await guild.create_voice_channel(
-                channel_name,
-                category=parent_category,
-                overwrites=overwrites,
-                reason=f"AI request by {message.author} ({message.author.id})",
-            )
+            create_kwargs = {
+                "reason": f"AI request by {message.author} ({message.author.id})",
+            }
+            if parent_category is not None:
+                create_kwargs["category"] = parent_category
+            if overwrites is not None:
+                create_kwargs["overwrites"] = overwrites
+            channel = await guild.create_voice_channel(channel_name, **create_kwargs)
         except Exception as e:
             return f"❌ Failed to create voice channel: {e}"
 
