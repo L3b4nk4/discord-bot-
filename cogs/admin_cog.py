@@ -4,6 +4,8 @@ Admin Commands Cog - Moderation and admin commands.
 import discord
 from discord.ext import commands
 from datetime import timedelta
+import os
+import re
 
 
 class AdminCog(commands.Cog, name="Admin"):
@@ -301,6 +303,83 @@ class AdminCog(commands.Cog, name="Admin"):
             description=f"Removed {role.mention} from {member.mention}.",
             color=discord.Color.orange()
         )
+        await ctx.send(embed=embed)
+
+    @commands.command(name="addcategory", aliases=["makecategory", "createcategory", "catadd"])
+    @commands.has_permissions(manage_channels=True)
+    async def add_category(self, ctx, *, spec: str):
+        """
+        Create a category.
+        Examples:
+        - !addcategory general
+        - !addcategory Staff Area @Test @Test1
+        """
+        me = ctx.guild.me or ctx.guild.get_member(self.bot.user.id)
+        if not me or not me.guild_permissions.manage_channels:
+            return await ctx.send("❌ I need `Manage Channels` permission.")
+
+        role_ids = [int(rid) for rid in re.findall(r"<@&(\d+)>", spec)]
+        category_name = re.sub(r"<@&\d+>", "", spec).strip().strip("'\"")
+        category_name = re.sub(r"\s+", " ", category_name).strip()
+
+        if not category_name:
+            return await ctx.send("❌ Usage: `!addcategory <name> [@Role @Role2 ...]`")
+
+        if len(category_name) > 100:
+            category_name = category_name[:100]
+
+        existing = discord.utils.get(ctx.guild.categories, name=category_name)
+        if existing:
+            return await ctx.send(f"ℹ️ Category `{existing.name}` already exists.")
+
+        roles = []
+        missing_roles = []
+        for role_id in role_ids:
+            role = ctx.guild.get_role(role_id)
+            if role:
+                roles.append(role)
+            else:
+                missing_roles.append(str(role_id))
+
+        overwrites = None
+        if roles:
+            overwrites = {
+                ctx.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            }
+            for role in roles:
+                overwrites[role] = discord.PermissionOverwrite(view_channel=True)
+
+        try:
+            category = await ctx.guild.create_category(
+                category_name,
+                overwrites=overwrites,
+                reason=f"Requested by {ctx.author} ({ctx.author.id})",
+            )
+        except Exception as e:
+            return await ctx.send(f"❌ Failed to create category: {e}")
+
+        embed = discord.Embed(
+            title="✅ Category Created",
+            description=f"Created category **{category.name}**.",
+            color=discord.Color.green(),
+        )
+
+        if roles:
+            embed.add_field(
+                name="🔒 Access Roles",
+                value=", ".join(role.mention for role in roles),
+                inline=False,
+            )
+        else:
+            embed.add_field(name="🌐 Visibility", value="Visible to everyone.", inline=False)
+
+        if missing_roles:
+            embed.add_field(
+                name="⚠️ Missing Role IDs",
+                value=", ".join(missing_roles),
+                inline=False,
+            )
+
         await ctx.send(embed=embed)
 
 

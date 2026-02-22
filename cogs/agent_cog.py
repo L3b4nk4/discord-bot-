@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 class AgentCog(commands.Cog, name="Agent"):
     """Advanced AI Agent commands using LLM CLI."""
 
+    MAX_COMMAND_CATALOG = 180
     NATURAL_TRIGGERS = (
         "hey manga",
         "hey gemini",
@@ -18,6 +19,12 @@ class AgentCog(commands.Cog, name="Agent"):
     )
     ACTION_HINTS = (
         "kick",
+        "ban",
+        "unban",
+        "mute",
+        "unmute",
+        "timeout",
+        "clear",
         "voice channel",
         "create channel",
         "make channel",
@@ -25,6 +32,9 @@ class AgentCog(commands.Cog, name="Agent"):
         "make role",
         "create roll",
         "make roll",
+        "category",
+        "catogery",
+        "catagory",
     )
     
     def __init__(self, bot, agent_service):
@@ -89,6 +99,31 @@ class AgentCog(commands.Cog, name="Agent"):
             models = await self.agent_service.list_models()
             await ctx.send(f"📋 **Available Models**:\n```{models}```")
 
+    @agent_group.command(name="capabilities", aliases=["caps", "commands"])
+    async def agent_capabilities(self, ctx):
+        """List what the AI can do in this server."""
+        catalog = self._build_command_catalog()
+        action_lines = [
+            "**🎯 AI Natural Actions**",
+            "`hey manga create role <name>`",
+            "`hey manga create voice channel <name>`",
+            "`hey manga create category <name>`",
+            "`hey manga kick @user`",
+            "",
+            f"**📚 Known Bot Commands ({len(catalog)} shown)**",
+        ]
+        action_lines.extend(f"`{line}`" for line in catalog[:self.MAX_COMMAND_CATALOG])
+
+        text = "\n".join(action_lines)
+        if len(text) <= 1990:
+            await ctx.send(text)
+            return
+
+        # Split long output.
+        chunks = [text[i:i + 1990] for i in range(0, len(text), 1990)]
+        for chunk in chunks:
+            await ctx.send(chunk)
+
     async def handle_natural_request(self, message: discord.Message) -> bool:
         """
         Handle free-form requests like:
@@ -144,6 +179,32 @@ class AgentCog(commands.Cog, name="Agent"):
             return ai_plan
         return self._fallback_action_plan(message, prompt)
 
+    def _build_command_catalog(self) -> List[str]:
+        entries: List[str] = []
+        seen = set()
+        for cmd in sorted(self.bot.walk_commands(), key=lambda c: c.qualified_name):
+            if cmd.hidden:
+                continue
+            qname = cmd.qualified_name.strip()
+            if not qname or qname in seen:
+                continue
+            seen.add(qname)
+
+            brief = ""
+            if cmd.help:
+                brief = str(cmd.help).strip().splitlines()[0]
+            elif cmd.brief:
+                brief = str(cmd.brief).strip()
+
+            if brief:
+                entries.append(f"!{qname} - {brief}")
+            else:
+                entries.append(f"!{qname}")
+
+            if len(entries) >= self.MAX_COMMAND_CATALOG:
+                break
+        return entries
+
     async def _plan_action_with_ai(self, message: discord.Message, prompt: str) -> Optional[Dict[str, Any]]:
         ai = getattr(self.bot, "ai_service", None)
         if not ai or not ai.enabled:
@@ -153,15 +214,19 @@ class AgentCog(commands.Cog, name="Agent"):
         member_names = [m.display_name for m in message.guild.members if not m.bot][:80]
         channel_names = [c.name for c in message.guild.channels][:80]
         mention_names = [m.display_name for m in message.mentions]
+        category_names = [c.name for c in message.guild.categories][:60]
+        command_catalog = self._build_command_catalog()
+        command_block = "\n".join(command_catalog)
 
         planner_prompt = (
             "You are Manga, a Discord bot action planner.\n"
             "Turn the user request into ONE JSON object.\n"
-            "Allowed actions: create_voice_channel, create_role, kick_member, chat, none.\n"
+            "Allowed actions: create_voice_channel, create_role, create_category, kick_member, chat, none.\n"
             "Output schema:\n"
             "{\n"
-            '  "action": "create_voice_channel|create_role|kick_member|chat|none",\n'
+            '  "action": "create_voice_channel|create_role|create_category|kick_member|chat|none",\n'
             '  "channel_name": "string",\n'
+            '  "category_name": "string",\n'
             '  "role_names": ["string"],\n'
             '  "role_name": "string",\n'
             '  "member_query": "string",\n'
@@ -171,14 +236,17 @@ class AgentCog(commands.Cog, name="Agent"):
             "Rules:\n"
             "- If user says role/roll, interpret as create_role.\n"
             "- If user asks for voice channel with role access, use create_voice_channel and fill role_names.\n"
+            "- If user asks to make/add/create category, use create_category.\n"
             "- If user asks to kick someone, use kick_member.\n"
             "- If no server action is requested, use chat.\n"
             "- Return ONLY JSON, no markdown.\n\n"
             f"Guild: {message.guild.name}\n"
             f"Known roles: {role_names}\n"
             f"Known channels: {channel_names}\n"
+            f"Known categories: {category_names}\n"
             f"Known members: {member_names}\n"
             f"Mentioned members: {mention_names}\n"
+            f"Known commands:\n{command_block}\n"
             f"User request: {prompt}\n"
         )
 
@@ -208,7 +276,7 @@ class AgentCog(commands.Cog, name="Agent"):
 
     def _normalize_plan(self, plan: Dict[str, Any]) -> Dict[str, Any]:
         action = str(plan.get("action", "chat")).strip().lower()
-        allowed_actions = {"create_voice_channel", "create_role", "kick_member", "chat", "none"}
+        allowed_actions = {"create_voice_channel", "create_role", "create_category", "kick_member", "chat", "none"}
         if action not in allowed_actions:
             action = "chat"
 
@@ -220,6 +288,7 @@ class AgentCog(commands.Cog, name="Agent"):
         normalized = {
             "action": action,
             "channel_name": str(plan.get("channel_name", "")).strip(),
+            "category_name": str(plan.get("category_name", "")).strip(),
             "role_names": role_names,
             "role_name": str(plan.get("role_name", "")).strip(),
             "member_query": str(plan.get("member_query", "")).strip(),
@@ -232,12 +301,27 @@ class AgentCog(commands.Cog, name="Agent"):
         low = prompt.lower()
         quoted = self._extract_quoted_values(prompt)
 
+        if re.search(r"\b(make|create|add)\b.*\b(category|catogery|catagory)\b", low):
+            category_name = quoted[0] if quoted else self._extract_category_name(prompt)
+            role_names = self._match_role_names_in_text(message.guild, low)
+            return {
+                "action": "create_category",
+                "channel_name": "",
+                "category_name": category_name or "new-category",
+                "role_names": role_names,
+                "role_name": "",
+                "member_query": "",
+                "reason": "",
+                "reply": "",
+            }
+
         if "voice" in low and "channel" in low:
             channel_name = quoted[0] if quoted else self._extract_channel_name(prompt)
             role_names = self._match_role_names_in_text(message.guild, low)
             return {
                 "action": "create_voice_channel",
                 "channel_name": channel_name or "voice-room",
+                "category_name": "",
                 "role_names": role_names,
                 "role_name": "",
                 "member_query": "",
@@ -250,6 +334,7 @@ class AgentCog(commands.Cog, name="Agent"):
             return {
                 "action": "create_role",
                 "channel_name": "",
+                "category_name": "",
                 "role_names": [],
                 "role_name": role_name or "",
                 "member_query": "",
@@ -268,6 +353,7 @@ class AgentCog(commands.Cog, name="Agent"):
             return {
                 "action": "kick_member",
                 "channel_name": "",
+                "category_name": "",
                 "role_names": [],
                 "role_name": "",
                 "member_query": member_query,
@@ -278,6 +364,7 @@ class AgentCog(commands.Cog, name="Agent"):
         return {
             "action": "chat",
             "channel_name": "",
+            "category_name": "",
             "role_names": [],
             "role_name": "",
             "member_query": "",
@@ -305,6 +392,19 @@ class AgentCog(commands.Cog, name="Agent"):
         return value
 
     @staticmethod
+    def _extract_category_name(prompt: str) -> str:
+        match = re.search(
+            r"(?:category|catogery|catagory)(?:\s+named|\s+called)?\s+([A-Za-z0-9 _-]{2,100})",
+            prompt,
+            re.IGNORECASE,
+        )
+        if not match:
+            return ""
+        value = match.group(1).strip(" .,:;-")
+        value = re.split(r"\b(with|for|that|where)\b", value, maxsplit=1, flags=re.IGNORECASE)[0].strip(" .,:;-")
+        return value
+
+    @staticmethod
     def _extract_role_name(prompt: str) -> str:
         match = re.search(r"(?:role|roll)(?:\s+named|\s+called)?\s+([A-Za-z0-9 _-]{2,100})", prompt, re.IGNORECASE)
         if not match:
@@ -317,6 +417,15 @@ class AgentCog(commands.Cog, name="Agent"):
     def _clean_role_name(name: str) -> str:
         value = (name or "").strip().strip("`'\"")
         value = re.sub(r"\s+", " ", value)
+        return value[:100]
+
+    @staticmethod
+    def _clean_category_name(name: str) -> str:
+        value = (name or "").strip().strip("`'\"")
+        value = re.sub(r"\s+", " ", value)
+        value = re.sub(r"[#:@]", "", value).strip()
+        if not value:
+            value = "New Category"
         return value[:100]
 
     @staticmethod
@@ -407,6 +516,8 @@ class AgentCog(commands.Cog, name="Agent"):
             return False
 
     def _author_can(self, message: discord.Message, permission_name: str) -> bool:
+        if message.guild and message.author.id == message.guild.owner_id:
+            return True
         if getattr(message.author.guild_permissions, permission_name, False):
             return True
         return self._is_auth_admin(message.author.id)
@@ -422,6 +533,8 @@ class AgentCog(commands.Cog, name="Agent"):
 
         if action == "create_role":
             return await self._action_create_role(message, plan)
+        if action == "create_category":
+            return await self._action_create_category(message, plan)
         if action == "create_voice_channel":
             return await self._action_create_voice_channel(message, prompt, plan)
         if action == "kick_member":
@@ -429,7 +542,16 @@ class AgentCog(commands.Cog, name="Agent"):
 
         ai = getattr(self.bot, "ai_service", None)
         if ai and ai.enabled:
-            return await ai.chat_response(message.author.display_name, prompt)
+            command_catalog = self._build_command_catalog()
+            catalog_text = "\n".join(command_catalog)
+            enriched_prompt = (
+                "You are Manga, a Discord bot.\n"
+                "Answer based on your real capabilities below.\n"
+                "If user asks for an unsupported action, say exactly what command/action they should use.\n"
+                f"Known commands:\n{catalog_text}\n\n"
+                f"User ({message.author.display_name}) says: {prompt}"
+            )
+            return await ai.generate(enriched_prompt)
         return "❌ I couldn't process that request."
 
     async def _action_create_role(self, message: discord.Message, plan: Dict[str, Any]) -> str:
@@ -459,6 +581,54 @@ class AgentCog(commands.Cog, name="Agent"):
         except Exception as e:
             return f"❌ Failed to create role: {e}"
 
+    async def _action_create_category(self, message: discord.Message, plan: Dict[str, Any]) -> str:
+        guild = message.guild
+        if not guild:
+            return "❌ This action works only in a server."
+
+        if not self._author_can(message, "manage_channels"):
+            return "❌ You need Manage Channels (or bot admin access) to do that."
+        if not self._bot_can(guild, "manage_channels"):
+            return "❌ I need Manage Channels permission."
+
+        category_name = self._clean_category_name(plan.get("category_name", ""))
+        requested_roles = plan.get("role_names", [])
+        resolved_roles, missing_roles = self._resolve_roles(guild, requested_roles)
+
+        existing = discord.utils.get(guild.categories, name=category_name)
+        if existing:
+            return f"ℹ️ Category `{existing.name}` already exists."
+
+        overwrites = None
+        if requested_roles:
+            if not resolved_roles:
+                return f"❌ I couldn't find these roles: {', '.join(requested_roles)}"
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            }
+            for role in resolved_roles:
+                overwrites[role] = discord.PermissionOverwrite(view_channel=True)
+
+        try:
+            category = await guild.create_category(
+                category_name,
+                overwrites=overwrites,
+                reason=f"AI request by {message.author} ({message.author.id})",
+            )
+        except Exception as e:
+            return f"❌ Failed to create category: {e}"
+
+        if resolved_roles:
+            role_mentions = ", ".join(r.mention for r in resolved_roles)
+            if missing_roles:
+                return (
+                    f"✅ Created category **{category.name}** with access for {role_mentions}.\n"
+                    f"⚠️ Missing roles: {', '.join(missing_roles)}"
+                )
+            return f"✅ Created category **{category.name}** with access for {role_mentions}."
+
+        return f"✅ Created category **{category.name}**."
+
     async def _action_create_voice_channel(self, message: discord.Message, prompt: str, plan: Dict[str, Any]) -> str:
         guild = message.guild
         if not guild:
@@ -470,6 +640,12 @@ class AgentCog(commands.Cog, name="Agent"):
             return "❌ I need Manage Channels permission."
 
         channel_name = self._clean_channel_name(plan.get("channel_name", ""))
+        category_name = self._clean_category_name(plan.get("category_name", "")) if plan.get("category_name") else ""
+        parent_category = None
+        if category_name:
+            parent_category = discord.utils.get(guild.categories, name=category_name)
+            if not parent_category:
+                return f"❌ Category `{category_name}` was not found."
         requested_roles = plan.get("role_names", []) or self._match_role_names_in_text(guild, prompt.lower())
         resolved_roles, missing_roles = self._resolve_roles(guild, requested_roles)
 
@@ -493,6 +669,7 @@ class AgentCog(commands.Cog, name="Agent"):
         try:
             channel = await guild.create_voice_channel(
                 channel_name,
+                category=parent_category,
                 overwrites=overwrites,
                 reason=f"AI request by {message.author} ({message.author.id})",
             )
