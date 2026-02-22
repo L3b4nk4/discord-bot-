@@ -75,6 +75,8 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat")
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+AI_PROVIDER_TIMEOUT = max(5, int(os.getenv("AI_PROVIDER_TIMEOUT", "12")))
+AI_TOTAL_TIMEOUT = max(AI_PROVIDER_TIMEOUT, int(os.getenv("AI_TOTAL_TIMEOUT", "20")))
 
 # Configure Groq
 groq_client = None
@@ -153,7 +155,7 @@ async def _generate_openrouter(prompt: str) -> str:
             f"{OPENROUTER_BASE}/chat/completions",
             headers=headers,
             json=payload,
-            timeout=aiohttp.ClientTimeout(total=60),
+            timeout=aiohttp.ClientTimeout(total=AI_PROVIDER_TIMEOUT),
         ) as resp:
             if resp.status != 200:
                 body = await resp.text()
@@ -167,25 +169,47 @@ llm_agent = LLMAgentService()
 
 async def ai_generate(prompt):
     """Helper to generate AI content using Gemini, OpenRouter, then Groq fallback."""
-    if gemini_client:
-        try:
-            return await asyncio.to_thread(_run_gemini_generate, prompt)
-        except Exception as e:
-            print(f"⚠️ Gemini generation failed: {e}")
+    async def _run_chain() -> str:
+        if gemini_client:
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(_run_gemini_generate, prompt),
+                    timeout=AI_PROVIDER_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                print(f"⚠️ Gemini generation timed out after {AI_PROVIDER_TIMEOUT}s")
+            except Exception as e:
+                print(f"⚠️ Gemini generation failed: {e}")
 
-    if OPENROUTER_API_KEY:
-        try:
-            return await _generate_openrouter(prompt)
-        except Exception as e:
-            print(f"⚠️ OpenRouter generation failed: {e}")
+        if OPENROUTER_API_KEY:
+            try:
+                return await asyncio.wait_for(
+                    _generate_openrouter(prompt),
+                    timeout=AI_PROVIDER_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                print(f"⚠️ OpenRouter generation timed out after {AI_PROVIDER_TIMEOUT}s")
+            except Exception as e:
+                print(f"⚠️ OpenRouter generation failed: {e}")
 
-    if groq_client:
-        try:
-            return await asyncio.to_thread(_run_groq_generate, prompt)
-        except Exception as e:
-            print(f"⚠️ Groq generation failed: {e}")
+        if groq_client:
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(_run_groq_generate, prompt),
+                    timeout=AI_PROVIDER_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                print(f"⚠️ Groq generation timed out after {AI_PROVIDER_TIMEOUT}s")
+            except Exception as e:
+                print(f"⚠️ Groq generation failed: {e}")
 
-    return "I need my AI brain (Gemini, Groq, or OpenRouter) to do that."
+        return "I need my AI brain (Gemini, Groq, or OpenRouter) to do that."
+
+    try:
+        return await asyncio.wait_for(_run_chain(), timeout=AI_TOTAL_TIMEOUT)
+    except asyncio.TimeoutError:
+        print(f"⚠️ ai_generate total timeout reached after {AI_TOTAL_TIMEOUT}s")
+        return "⏱️ I'm taking too long right now. Please try again."
 
 async def shutdown_telegram(signal_name):
     """Cleanup Telegram on shutdown."""

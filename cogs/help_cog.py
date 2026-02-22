@@ -41,7 +41,7 @@ class HelpView(ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.ctx.author.id:
-            await interaction.response.send_message("❌ This menu is personalized for the command author. Run `!hh` yourself!", ephemeral=True)
+            await interaction.response.send_message("❌ This menu is personalized for the command author. Run `!help` yourself!", ephemeral=True)
             return False
         return True
 
@@ -388,8 +388,8 @@ class HelpCog(commands.Cog, name="Help"):
     def cog_unload(self):
         self.bot.help_command = self._original_help_command
     
-    @commands.hybrid_command(name="hh", aliases=[])
-    async def hh_command(self, ctx, *, command_name: str = None):
+    @commands.hybrid_command(name="help", aliases=["hh"])
+    async def help_command(self, ctx, *, command_name: str = None):
         """Show interactive help menu."""
         is_owner, is_admin, is_server_owner = _help_access_flags(self.bot, ctx)
         can_bypass_help_permissions = is_owner or is_admin or is_server_owner

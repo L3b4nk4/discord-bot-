@@ -157,7 +157,8 @@ class AgentCog(commands.Cog, name="Agent"):
         return True
 
     def _extract_natural_prompt(self, content: str) -> Optional[str]:
-        text = (content or "").strip()
+        # Mention-only mode is enforced by caller; strip raw mention tokens first.
+        text = re.sub(r"<@!?\d+>", "", content or "").strip()
         lower = text.lower()
         if not text:
             return None
@@ -174,13 +175,34 @@ class AgentCog(commands.Cog, name="Agent"):
             if any(hint in tail_lower for hint in self.ACTION_HINTS):
                 return tail or None
 
+        # Mention + direct action text (e.g. "@Manga create voice channel test").
+        if any(hint in lower for hint in self.ACTION_HINTS):
+            return text
+
         return None
 
     async def _plan_action(self, message: discord.Message, prompt: str) -> Dict[str, Any]:
+        fallback_plan = self._fallback_action_plan(message, prompt)
         ai_plan = await self._plan_action_with_ai(message, prompt)
+        actionable = {"create_voice_channel", "create_role", "create_category", "kick_member"}
+
+        # Prefer explicit server actions. If AI only returns chat/none,
+        # use deterministic fallback action parsing.
+        if ai_plan and ai_plan.get("action") in actionable:
+            ai_plan = dict(ai_plan)
+            for key in ("channel_name", "category_name", "role_name", "member_query", "reason"):
+                if not ai_plan.get(key):
+                    ai_plan[key] = fallback_plan.get(key, "")
+            if not ai_plan.get("role_names"):
+                ai_plan["role_names"] = fallback_plan.get("role_names", [])
+            return ai_plan
+
+        if fallback_plan.get("action") in actionable:
+            return fallback_plan
+
         if ai_plan:
             return ai_plan
-        return self._fallback_action_plan(message, prompt)
+        return fallback_plan
 
     def _build_command_catalog(self) -> List[str]:
         entries: List[str] = []

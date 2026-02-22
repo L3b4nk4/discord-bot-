@@ -27,6 +27,7 @@ class LLMAgentService:
         self.api_key = os.getenv('OPENROUTER_API_KEY')
         self.default_model = default_model or os.getenv('OPENROUTER_MODEL', self.FREE_MODELS[0])
         self.base_url = "https://openrouter.ai/api/v1"
+        self.request_timeout = max(5, int(os.getenv("LLM_AGENT_TIMEOUT", "20")))
         
         # Check if we have API key
         if self.api_key:
@@ -71,7 +72,7 @@ class LLMAgentService:
                 f"{self.base_url}/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=60)
+                timeout=aiohttp.ClientTimeout(total=self.request_timeout)
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -87,7 +88,7 @@ class LLMAgentService:
                     return f"❌ Error: {error_text[:100]}"
                     
         except asyncio.TimeoutError:
-            return "⏱️ Request timed out. Try again."
+            return f"⏱️ Request timed out after {self.request_timeout}s. Try again."
         except aiohttp.ClientError as e:
             return f"❌ Connection error: {e}"
         except Exception as e:

@@ -61,6 +61,8 @@ class AIService:
         self.openrouter_key = os.getenv("OPENROUTER_API_KEY")
         self.openrouter_model = os.getenv("OPENROUTER_MODEL", self.FREE_MODELS[0])
         self.openrouter_base = "https://openrouter.ai/api/v1"
+        self.provider_timeout = max(5, int(os.getenv("AI_PROVIDER_TIMEOUT", "12")))
+        self.total_timeout = max(self.provider_timeout, int(os.getenv("AI_TOTAL_TIMEOUT", "20")))
         
         # Groq fallback config
         self.groq_client = None
@@ -196,9 +198,12 @@ class AIService:
 
         model = model or self.gemini_model
         try:
-            return await asyncio.to_thread(self._run_gemini, prompt, model)
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._run_gemini, prompt, model),
+                timeout=self.provider_timeout,
+            )
         except asyncio.TimeoutError:
-            return "⏱️ Request timed out. Try again."
+            return f"⏱️ Request timed out after {self.provider_timeout}s. Try again."
         except Exception as e:
             print(f"❌ Gemini Error: {e}")
             return f"AI Error: {str(e)}"
@@ -231,7 +236,7 @@ class AIService:
                 f"{self.openrouter_base}/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=60)
+                timeout=aiohttp.ClientTimeout(total=self.provider_timeout)
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -247,7 +252,7 @@ class AIService:
                     return f"AI Error: {error[:100]}"
                     
         except asyncio.TimeoutError:
-            return "⏱️ Request timed out. Try again."
+            return f"⏱️ Request timed out after {self.provider_timeout}s. Try again."
         except Exception as e:
             print(f"❌ OpenRouter Error: {e}")
             return f"AI Error: {str(e)}"
@@ -257,7 +262,12 @@ class AIService:
         if not self.groq_client:
             return "Groq not available."
         try:
-            return await asyncio.to_thread(self._run_groq, prompt)
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._run_groq, prompt),
+                timeout=self.provider_timeout,
+            )
+        except asyncio.TimeoutError:
+            return f"⏱️ Request timed out after {self.provider_timeout}s. Try again."
         except Exception as e:
             print(f"❌ Groq Error: {e}")
             return f"Thinking Error: {str(e)}"
@@ -274,8 +284,8 @@ class AIService:
         )
         return completion.choices[0].message.content
 
-    async def generate(self, prompt: str) -> str:
-        """Generate AI response using active provider."""
+    async def _generate_with_fallback(self, prompt: str) -> str:
+        """Generate AI response using active provider and fallback order."""
         if not self.enabled:
             return "❌ AI not initialized. Set GEMINI_API_KEY, OPENROUTER_API_KEY, or GROQ_API_KEY."
         
@@ -304,6 +314,17 @@ class AIService:
             return await self.generate_groq(prompt)
         else:
             return "AI provider not found."
+
+    async def generate(self, prompt: str) -> str:
+        """Generate AI response with an overall timeout guard."""
+        try:
+            return await asyncio.wait_for(
+                self._generate_with_fallback(prompt),
+                timeout=self.total_timeout,
+            )
+        except asyncio.TimeoutError:
+            print(f"⚠️ AI Service total timeout reached after {self.total_timeout}s")
+            return "⏱️ I'm taking too long right now. Please try again."
     
     async def chat_response(self, username: str, message: str) -> str:
         """Generate a chat response."""
