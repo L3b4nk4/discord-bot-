@@ -8,3 +8,4 @@ edge-tts
 SpeechRecognition
 pydub
 firebase-admin
+google-genai

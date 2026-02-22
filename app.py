@@ -29,6 +29,14 @@ import random
 import telegram
 import json
 
+# Optional: Google GenAI SDK
+try:
+    from google import genai
+    GENAI_AVAILABLE = True
+except ImportError:
+    genai = None
+    GENAI_AVAILABLE = False
+
 # --- DNS MONKEY PATCH (CRITICAL FOR SPACES/DOCKER) ---
 _orig_getaddrinfo = socket.getaddrinfo
 
@@ -74,48 +82,42 @@ if GROQ_API_KEY:
     except Exception as e:
         print(f"⚠️ Failed to initialize Groq: {e}")
 
-if GEMINI_API_KEY:
-    print(f"✅ Gemini Configured ({GEMINI_MODEL})")
+gemini_client = None
+if GEMINI_API_KEY and GENAI_AVAILABLE:
+    try:
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+        print(f"✅ Gemini Configured ({GEMINI_MODEL})")
+    except Exception as e:
+        print(f"⚠️ Failed to initialize Gemini SDK: {e}")
+elif GEMINI_API_KEY and not GENAI_AVAILABLE:
+    print("⚠️ GEMINI_API_KEY found but google-genai is not installed.")
+
+
+def _run_gemini_generate(prompt: str) -> str:
+    if not gemini_client:
+        raise RuntimeError("Gemini client unavailable")
+    full_prompt = (
+        "You are Manga, a helpful and witty Discord bot. Be concise and clear.\n\n"
+        f"User request:\n{prompt}"
+    )
+    response = gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=full_prompt,
+    )
+    text = getattr(response, "text", None)
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    raise RuntimeError("Gemini returned no text")
 
 # Configure LLM Agent (Ollama - free, local)
 from services.llm_agent_service import LLMAgentService
 llm_agent = LLMAgentService()
 
 async def ai_generate(prompt):
-    """Helper to generate AI content using Gemini, with Groq fallback."""
-    if GEMINI_API_KEY:
+    """Helper to generate AI content using Gemini SDK, with Groq fallback."""
+    if gemini_client:
         try:
-            url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-            )
-            payload = {
-                "systemInstruction": {
-                    "parts": [
-                        {
-                            "text": (
-                                "You are Manga, a helpful and witty Discord bot. "
-                                "Be concise and clear."
-                            )
-                        }
-                    ]
-                },
-                "contents": [
-                    {"role": "user", "parts": [{"text": prompt}]}
-                ],
-                "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1024},
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-                    data = await resp.json(content_type=None)
-                    if resp.status == 200 and data.get("candidates"):
-                        parts = data["candidates"][0].get("content", {}).get("parts", [])
-                        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
-                        if text:
-                            return text
-                    err = data.get("error", {}).get("message") if isinstance(data, dict) else None
-                    print(f"⚠️ Gemini error ({resp.status}): {err or 'unknown'}")
+            return await asyncio.to_thread(_run_gemini_generate, prompt)
         except Exception as e:
             print(f"⚠️ Gemini generation failed: {e}")
 
