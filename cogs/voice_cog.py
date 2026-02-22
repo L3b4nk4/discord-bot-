@@ -103,23 +103,52 @@ class VoiceCog(commands.Cog, name="Voice"):
     @commands.command(name="sound")
     async def sound(self, ctx, name: str):
         """Play a sound effect."""
-        sounds = {
+        text_sounds = {
             "airhorn": "BWAAAAAAH!",
             "bruh": "Bruh.",
             "oof": "Oof!",
             "wow": "Wow!",
             "sad": "Sad violin noises...",
         }
-        
-        if name.lower() in sounds:
-            if ctx.voice_client:
-                await self.voice.tts.speak(ctx.voice_client, sounds[name.lower()])
-                await ctx.message.add_reaction("🔊")
-            else:
-                await ctx.send("❌ I'm not in voice!")
-        else:
-            available = ", ".join(sounds.keys())
-            await ctx.send(f"Available sounds: {available}")
+
+        # Ensure bot is in the requester's voice channel.
+        if not ctx.voice_client:
+            if not ctx.author.voice:
+                return await ctx.send("❌ Join a voice channel first.")
+            await self.voice.join_channel(ctx)
+        elif ctx.author.voice and ctx.voice_client.channel != ctx.author.voice.channel:
+            try:
+                await ctx.voice_client.move_to(ctx.author.voice.channel)
+            except Exception as e:
+                return await ctx.send(f"❌ Couldn't move to your channel: {e}")
+
+        key = name.lower().strip()
+        if key in text_sounds:
+            await self.voice.tts.speak(ctx.voice_client, text_sounds[key])
+            await ctx.message.add_reaction("🔊")
+            return
+
+        # Try mp3 in voice folder, e.g. !sound sle -> voice/sle.mp3
+        file_name = key if key.endswith(".mp3") else f"{key}.mp3"
+        played = await self.voice.play_sound_file(ctx.voice_client, file_name)
+        if played:
+            await ctx.message.add_reaction("🔊")
+            return
+
+        mp3_names = []
+        try:
+            for fn in sorted(os.listdir(os.path.join(os.getcwd(), "voice"))):
+                if fn.lower().endswith(".mp3"):
+                    mp3_names.append(fn[:-4])
+        except Exception:
+            pass
+        available_text = ", ".join(sorted(text_sounds.keys()))
+        available_mp3 = ", ".join(mp3_names[:20]) if mp3_names else "none"
+        await ctx.send(
+            f"❌ Sound `{name}` not found.\n"
+            f"Text sounds: {available_text}\n"
+            f"MP3 sounds: {available_mp3}"
+        )
     
     @commands.command(name="listen")
     async def listen(self, ctx, state: str = None):
@@ -323,8 +352,17 @@ class VoiceCog(commands.Cog, name="Voice"):
     async def _ensure_voice_channel(self, guild):
         """Ensure 'Manga_bot' channel exists and join it."""
         try:
-            channel_name = "Manga_bot"
-            channel = discord.utils.get(guild.voice_channels, name=channel_name)
+            channel_name = self.voice.home_channel_name
+            # Prefer active user voice channel; fallback to configured home channel.
+            channel = next(
+                (
+                    c for c in guild.voice_channels
+                    if any(not m.bot for m in c.members)
+                ),
+                None,
+            )
+            if not channel:
+                channel = discord.utils.get(guild.voice_channels, name=channel_name)
             
             # Create if missing
             if not channel:
@@ -355,13 +393,10 @@ class VoiceCog(commands.Cog, name="Voice"):
                     self.voice.sinks[guild.id] = VoiceSink(self.voice)
                     vc.listen(self.voice.sinks[guild.id])
                     
-                    # Need a text channel for output. Search for 'manga-logs' or 'general' or first avail
-                    text_channel = discord.utils.get(guild.text_channels, name="manga-logs")
-                    if not text_channel:
-                         text_channel = guild.text_channels[0]
+                    # Need a writable text channel for output.
+                    text_channel = self.voice._pick_text_channel(guild)
                     
                     # Start processing
-                    import asyncio
                     task = asyncio.create_task(
                         self.voice._process_audio_loop(guild.id, text_channel, vc)
                     )
@@ -373,7 +408,7 @@ class VoiceCog(commands.Cog, name="Voice"):
                     # Reset manual disconnect flag
                     self.voice.manual_disconnect_guilds.discard(guild.id)
                     
-                    print(f"✅ Auto-joined '{channel_name}' in {guild.name}")
+                    print(f"✅ Auto-joined '{channel.name}' in {guild.name}")
                     
                 except Exception as e:
                     print(f"❌ Failed to auto-join in {guild.name}: {e}")
