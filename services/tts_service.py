@@ -73,15 +73,24 @@ class TTSService:
                 print("⚠️ TTS: Generated file is empty")
                 return False
             
+            loop = asyncio.get_running_loop()
+            playback_done = asyncio.Event()
+            playback_error = {"value": None}
+
             # Cleanup callback
             def after_playback(error):
                 if error:
-                    print(f"⚠️ TTS Playback error: {error}")
+                    playback_error["value"] = error
                 try:
                     if os.path.exists(output_file):
                         os.remove(output_file)
                 except Exception as e:
                     print(f"⚠️ TTS Cleanup error: {e}")
+                finally:
+                    try:
+                        loop.call_soon_threadsafe(playback_done.set)
+                    except RuntimeError:
+                        pass
             
             # Play the audio
             voice_client.play(
@@ -89,14 +98,21 @@ class TTSService:
                 after=after_playback
             )
             
-            # Wait for playback to complete
-            while voice_client.is_playing():
-                await asyncio.sleep(0.1)
+            # Wait for playback to complete (event-driven, no polling loop).
+            await playback_done.wait()
+            if playback_error["value"]:
+                print(f"⚠️ TTS Playback error: {playback_error['value']}")
+                return False
             
             return True
             
         except Exception as e:
             print(f"❌ TTS Error: {e}")
+            try:
+                if 'output_file' in locals() and os.path.exists(output_file):
+                    os.remove(output_file)
+            except Exception:
+                pass
             return False
     
     async def get_available_voices(self) -> list:

@@ -4,6 +4,7 @@ A voice-enabled AI assistant for Discord.
 """
 
 import discord
+import discord.opus
 from discord.ext import commands
 import os
 from dotenv import load_dotenv
@@ -13,6 +14,29 @@ load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+# Ensure Opus is loaded for voice playback
+def _load_opus():
+    if discord.opus.is_loaded():
+        return True
+    candidates = [
+        "libopus.so.0",
+        "/usr/lib/x86_64-linux-gnu/libopus.so.0",
+        "/usr/local/lib/libopus.so.0",
+        "opus.dll",
+        "libopus.dylib",
+    ]
+    for lib in candidates:
+        try:
+            discord.opus.load_opus(lib)
+            print(f"✅ Loaded Opus library: {lib}")
+            return True
+        except Exception:
+            continue
+    print("⚠️ Opus library not found. Voice playback may fail.")
+    return False
+
+_load_opus()
 
 # Import services
 from services import AIService, TTSService, SpeechRecognitionService, LLMAgentService
@@ -41,6 +65,14 @@ class MangaBot(commands.Bot):
         )
         # Explicitly ensure help command is removed to avoid overrides/conflicts
         self.remove_command('help')
+
+        # Auto-delete bot logs in configured channels (default: 3 hours).
+        self.log_auto_delete_seconds = max(0, int(os.getenv("LOG_AUTO_DELETE_SECONDS", "10800")))
+        self.log_auto_delete_channels = {
+            name.strip().lower()
+            for name in os.getenv("LOG_AUTO_DELETE_CHANNELS", "manga-logs,logs").split(",")
+            if name.strip()
+        }
         
         # Initialize services
         print("📦 Initializing services...")
@@ -96,8 +128,18 @@ class MangaBot(commands.Bot):
     
     async def on_message(self, message):
         """Handle incoming messages."""
-        # Ignore own messages
+        # Auto-clean bot log messages in log channels.
         if message.author == self.user:
+            channel_name = getattr(message.channel, "name", None)
+            if (
+                self.log_auto_delete_seconds > 0
+                and isinstance(channel_name, str)
+                and channel_name.lower() in self.log_auto_delete_channels
+            ):
+                try:
+                    await message.delete(delay=self.log_auto_delete_seconds)
+                except Exception:
+                    pass
             return
         
         # Process commands

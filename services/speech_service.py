@@ -49,6 +49,7 @@ class SpeechRecognitionService:
         # Use default language if not specified
         lang = language or self.default_language
         
+        wav_path = None
         try:
             # Create unique temporary filename
             unique_id = int(time.time() * 1000)
@@ -62,11 +63,8 @@ class SpeechRecognitionService:
                 print("❌ Speech: Failed to create WAV file")
                 return ""
             
-            # Load and transcribe
-            with sr.AudioFile(wav_path) as source:
-                # Adjust for noise
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
-                audio = self.recognizer.record(source)
+            # Load and transcribe off the event loop.
+            audio = await asyncio.to_thread(self._load_audio_file, wav_path)
             
             # Perform recognition in thread pool
             text = await asyncio.to_thread(
@@ -74,9 +72,6 @@ class SpeechRecognitionService:
                 audio,
                 language=lang
             )
-            
-            # Cleanup
-            self._cleanup_file(wav_path)
             
             return text.strip()
             
@@ -89,6 +84,9 @@ class SpeechRecognitionService:
         except Exception as e:
             print(f"❌ Speech Recognition Error: {e}")
             return ""
+        finally:
+            if wav_path:
+                self._cleanup_file(wav_path)
     
     async def _save_as_wav(self, audio_data: bytes, filepath: str,
                           sample_rate: int, channels: int):
@@ -101,6 +99,11 @@ class SpeechRecognitionService:
                 wf.writeframes(audio_data)
         
         await asyncio.to_thread(_write_wav)
+
+    def _load_audio_file(self, filepath: str):
+        """Load WAV audio into SpeechRecognition AudioData."""
+        with sr.AudioFile(filepath) as source:
+            return self.recognizer.record(source)
     
     def _cleanup_file(self, filepath: str):
         """Safely remove a temporary file."""

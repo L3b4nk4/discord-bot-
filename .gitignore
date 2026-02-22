@@ -16,3 +16,11 @@ env/
 .idea/
 *.swp
 *.swo
+
+# Runtime data
+auth_db/
+data/
+logs/
+
+# Firebase credentials
+*firebase-adminsdk*.json

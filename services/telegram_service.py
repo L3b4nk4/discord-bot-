@@ -7,7 +7,9 @@ import asyncio
 import logging
 from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+
 from telegram.request import HTTPXRequest
+from telegram.error import Conflict
 
 class TelegramService:
     def __init__(self, discord_bot, ai_service):
@@ -39,6 +41,12 @@ class TelegramService:
             await self.app.start()
             await self.app.updater.start_polling()
             print("✅ Telegram Service: Connected and polling")
+        except Conflict:
+            print("⚠️ Telegram Conflict: Helper terminated by other instance. (Normal if running multiple bots)")
+            # Clean up app so stop() doesn't fail
+            if self.app:
+                await self.app.shutdown()
+                self.app = None
         except Exception as e:
             print(f"❌ Telegram Service Error: {e}")
 

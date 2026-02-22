@@ -5,6 +5,7 @@ from discord.ext import voice_recv
 import struct
 import math
 import time
+import os
 
 
 class VoiceSink(voice_recv.AudioSink):
@@ -28,6 +29,7 @@ class VoiceSink(voice_recv.AudioSink):
         """
         super().__init__()
         self.voice_handler = voice_handler
+        self.verbose_logs = os.getenv("VOICE_VERBOSE_LOGS", "0").lower() in {"1", "true", "yes", "on"}
         
         # User audio buffers: user_id -> bytearray
         self.user_buffers = {}
@@ -58,6 +60,11 @@ class VoiceSink(voice_recv.AudioSink):
         if self.voice_handler.owner_only and user:
             if user.id != self.voice_handler.owner_id:
                 return
+
+        # Skip if allow-list mode is active and user isn't allowed
+        if (not self.voice_handler.owner_only) and self.voice_handler.allowed_users:
+            if not user or user.id not in self.voice_handler.allowed_users:
+                return
         
         # Skip blocked users
         if user and user.id in self.voice_handler.blocked_users:
@@ -73,8 +80,9 @@ class VoiceSink(voice_recv.AudioSink):
         # Initialize buffer for new user
         if uid not in self.user_buffers:
             self.user_buffers[uid] = bytearray()
-            username = user.display_name if user else "Unknown"
-            print(f"🎤 Started receiving audio from {username}")
+            if self.verbose_logs:
+                username = user.display_name if user else "Unknown"
+                print(f"🎤 Started receiving audio from {username}")
         
         # Check buffer size limit
         current_size = len(self.user_buffers[uid])
@@ -89,7 +97,7 @@ class VoiceSink(voice_recv.AudioSink):
         
         # Debug logging
         self.packet_count += 1
-        if self.packet_count % 500 == 0:
+        if self.verbose_logs and self.packet_count % 500 == 0:
             print(f"📊 Received {self.packet_count} audio packets")
     
     def cleanup(self):
@@ -129,7 +137,8 @@ class VoiceSink(voice_recv.AudioSink):
                 self.user_buffers[uid] = bytearray()
                 self.processing.add(uid)
                 ready.append((uid, audio_data))
-                print(f"🎙️ Segment ready: {len(audio_data)} bytes, silence: {silence_time:.1f}s")
+                if self.verbose_logs:
+                    print(f"🎙️ Segment ready: {len(audio_data)} bytes, silence: {silence_time:.1f}s")
         
         return ready
     

@@ -36,8 +36,8 @@ class VoiceHandler:
     # Target user ID for auto-join and audio playback
     AUTO_JOIN_USER_ID = 1143546576124530729
     
-    # Audio file to play when target user joins
-    AUTO_PLAY_AUDIO = "a3sr.mp3"
+    # Audio file to play when anyone joins
+    AUTO_PLAY_AUDIO = "sle.mp3"
     
     # Keep-alive interval in seconds (4 minutes to prevent inactivity disconnect)
     KEEP_ALIVE_INTERVAL = 240
@@ -63,6 +63,11 @@ class VoiceHandler:
         self.owner_only = False
         self.owner_id = None
         self.blocked_users = set()
+        self.allowed_users = set()  # if set, only these users are heard
+
+        # Runtime tuning
+        self.verbose_logs = os.getenv("VOICE_VERBOSE_LOGS", "0").lower() in {"1", "true", "yes", "on"}
+        self.max_segment_tasks = max(1, int(os.getenv("VOICE_MAX_SEGMENT_TASKS", "4")))
         
         # Auto-kick list - users to kick when they join voice
         self.auto_kick_users = set()  # user_ids to auto-kick from voice
@@ -74,12 +79,30 @@ class VoiceHandler:
         # Active connections per guild
         self.sinks = {}   # guild_id -> VoiceSink
         self.tasks = {}   # guild_id -> asyncio.Task
+        self.segment_tasks = {}  # guild_id -> set[asyncio.Task]
         
         # Keep-alive tasks per guild
         self.keep_alive_tasks = {}  # guild_id -> asyncio.Task
+        self.keep_alive_ping_count = {}  # guild_id -> int
 
         # Track if disconnect was manual (command) or accidental (kick/error)
-        self.manual_disconnect = False
+        self.manual_disconnect_guilds = set() # guild_ids where manual disconnect occurred
+
+        # Auto-join state per guild (to avoid enforcement loop interference)
+        self._auto_joining = set()
+
+        # Audio loop pacing (reduce idle CPU burn; configurable via env)
+        self.audio_loop_idle_sleep = float(os.getenv("VOICE_IDLE_SLEEP", "0.05"))
+        self.audio_loop_active_sleep = float(os.getenv("VOICE_ACTIVE_SLEEP", "0.005"))
+
+    def _debug(self, message: str):
+        if self.verbose_logs:
+            print(message)
+
+    def _cancel_segment_tasks(self, guild_id: int):
+        tasks = self.segment_tasks.pop(guild_id, set())
+        for task in list(tasks):
+            task.cancel()
 
     
     async def join_channel(self, ctx) -> bool:
@@ -117,6 +140,7 @@ class VoiceHandler:
             # Cancel existing processing task if any
             if ctx.guild.id in self.tasks:
                 self.tasks[ctx.guild.id].cancel()
+            self._cancel_segment_tasks(ctx.guild.id)
             
             # Start new processing task
             task = asyncio.create_task(
@@ -133,7 +157,7 @@ class VoiceHandler:
             await self.tts.speak(vc, "Hello! Say 'Manga' followed by your command!", self.manga_voice)
             
             # Reset manual disconnect flag on successful join
-            self.manual_disconnect = False
+            self.manual_disconnect_guilds.discard(ctx.guild.id)
             
             return True
             
@@ -162,6 +186,7 @@ class VoiceHandler:
         if guild_id in self.tasks:
             self.tasks[guild_id].cancel()
             del self.tasks[guild_id]
+        self._cancel_segment_tasks(guild_id)
         
         # Cancel keep-alive task
         self._stop_keep_alive(guild_id)
@@ -181,7 +206,7 @@ class VoiceHandler:
         await ctx.send("👋 Left the voice channel!")
         
         # Set flag so we don't auto-rejoin
-        self.manual_disconnect = True
+        self.manual_disconnect_guilds.add(guild_id)
         
         return True
     
@@ -195,31 +220,52 @@ class VoiceHandler:
             voice_client: Voice client for speaking
         """
         print(f"🎙️ Audio processing loop started for guild {guild_id}")
+        self.segment_tasks.setdefault(guild_id, set())
         
         try:
             while True:
-                await asyncio.sleep(0.001)  # Check every 1ms to prevent audio buffering issues
-                
                 sink = self.sinks.get(guild_id)
                 if not sink:
                     break
                 
                 # Get segments ready for processing
                 segments = sink.get_ready_segments()
+                if not segments:
+                    await asyncio.sleep(self.audio_loop_idle_sleep)
+                    continue
                 
                 for user_id, audio_data in segments:
-                    # Process each segment in background
-                    asyncio.create_task(
+                    # Bound concurrent work to avoid flooding event loop/CPU.
+                    task_set = self.segment_tasks.setdefault(guild_id, set())
+                    while len(task_set) >= self.max_segment_tasks:
+                        done, _ = await asyncio.wait(
+                            task_set,
+                            return_when=asyncio.FIRST_COMPLETED,
+                            timeout=0.2,
+                        )
+                        if done:
+                            task_set.difference_update(done)
+
+                    task = asyncio.create_task(
                         self._process_segment(
                             guild_id, user_id, audio_data,
                             text_channel, voice_client
                         )
                     )
+                    task_set.add(task)
+                    task.add_done_callback(
+                        lambda t, gid=guild_id: self.segment_tasks.get(gid, set()).discard(t)
+                    )
+                
+                # Short sleep to yield when actively processing audio
+                await asyncio.sleep(self.audio_loop_active_sleep)
         
         except asyncio.CancelledError:
             print(f"🛑 Audio loop stopped for guild {guild_id}")
         except Exception as e:
             print(f"❌ Audio loop error: {e}")
+        finally:
+            self._cancel_segment_tasks(guild_id)
     
     async def _process_segment(self, guild_id: int, user_id: int,
                                audio_data: bytes, text_channel, voice_client):
@@ -238,16 +284,16 @@ class VoiceHandler:
             rms = VoiceSink.calculate_rms(audio_data)
             
             if rms < VoiceSink.MIN_RMS:
-                print(f"🔇 Audio too quiet (RMS: {int(rms)}), skipping")
+                self._debug(f"🔇 Audio too quiet (RMS: {int(rms)}), skipping")
                 return
             
-            print(f"🎤 Processing: {len(audio_data)} bytes, RMS: {int(rms)}")
+            self._debug(f"🎤 Processing: {len(audio_data)} bytes, RMS: {int(rms)}")
             
             # Transcribe audio to text
             text = await self.speech.transcribe(audio_data)
             
             if not text:
-                print("🔇 No speech detected")
+                self._debug("🔇 No speech detected")
                 return
             
             # Get user info
@@ -256,13 +302,13 @@ class VoiceHandler:
             guild = self.bot.get_guild(guild_id)
             member = guild.get_member(user_id) if guild else None
             
-            print(f"🗣️ {username} said: '{text}'")
+            self._debug(f"🗣️ {username} said: '{text}'")
             
             # Check for trigger word "manga"
             text_lower = text.lower().strip()
             
             if not self._has_trigger(text_lower):
-                print(f"🔇 No trigger word 'manga' detected, ignoring")
+                self._debug("🔇 No trigger word 'manga' detected, ignoring")
                 return
             
             # Remove trigger word and get the command/message
@@ -285,7 +331,7 @@ class VoiceHandler:
             else:
                 # Not a command, treat as chat
                 response = await self.ai.voice_response(username, command_text)
-                print(f"🤖 Response: '{response}'")
+                self._debug(f"🤖 Response: '{response}'")
                 await self._respond(text_channel, voice_client, username, text, response)
         
         except Exception as e:
@@ -521,6 +567,17 @@ class VoiceHandler:
     def unblock_user(self, user_id: int):
         """Unblock a user."""
         self.blocked_users.discard(user_id)
+
+    def set_allowed_users(self, user_ids=None):
+        """Set allow-list for voice input. Empty/None means everyone."""
+        if user_ids:
+            self.allowed_users = set(int(uid) for uid in user_ids)
+        else:
+            self.allowed_users.clear()
+
+    def clear_allowed_users(self):
+        """Clear voice allow-list so everyone is allowed."""
+        self.allowed_users.clear()
     
     def set_voice(self, voice_name: str) -> bool:
         """Set Manga's TTS voice."""
@@ -554,9 +611,33 @@ class VoiceHandler:
         # 1. BOT DISCONNECT HANDLING (Auto-Rejoin)
         if member.id == self.bot.user.id:
             # Bot was disconnected (channel is None) and it wasn't manual
-            if after.channel is None and not self.manual_disconnect:
+            if after.channel is None and member.guild.id not in self.manual_disconnect_guilds:
                 print(f"⚠️ Bot disconnected unexpectedly from {before.channel} in {member.guild.name}")
                 await self._attempt_rejoin(member.guild)
+            
+            # Bot was moved/connected
+            elif after.channel is not None:
+                # If we're auto-joining to play welcome audio, don't force a move back
+                if self.is_auto_joining(member.guild.id):
+                    return
+
+                # Check if in "Manga_bot"
+                target_channel = discord.utils.get(member.guild.voice_channels, name="Manga_bot")
+                if target_channel and after.channel.id != target_channel.id:
+                    # MITIGATION: Wait a bit to let the moving instance start playing
+                    # This helps if there are 2 bot instances fighting
+                    await asyncio.sleep(2.0)
+                    
+                    # If we are playing audio, ignore (we will return after playback via callback)
+                    # We check AGAIN after the sleep because playback might have just started
+                    if member.guild.voice_client and member.guild.voice_client.is_playing():
+                        return
+                    
+                    print(f"⚠️ Bot detected in wrong channel ({after.channel.name}). Moving back to {target_channel.name}...")
+                    try:
+                        await member.move_to(target_channel)
+                    except Exception as e:
+                        print(f"❌ Failed to move bot back: {e}")
             return
 
         # 2. USER STATE UPDATES
@@ -574,8 +655,8 @@ class VoiceHandler:
                 except Exception as e:
                     print(f"❌ Failed to auto-kick {member.display_name}: {e}")
             
-            # Auto-join and play audio for target user
-            if member.id == self.AUTO_JOIN_USER_ID:
+            # Auto-join and play audio for any non-bot user
+            if not member.bot:
                 await self._auto_join_and_play(after.channel)
         
         return False
@@ -589,6 +670,8 @@ class VoiceHandler:
         """
         try:
             guild = channel.guild
+            self._auto_joining.add(guild.id)
+            guild = channel.guild
             
             # Check if already connected to this channel
             voice_client = guild.voice_client
@@ -596,31 +679,89 @@ class VoiceHandler:
             if voice_client:
                 if voice_client.channel.id == channel.id:
                     # Already in the same channel, just play audio
-                    await self._play_audio_file(voice_client)
+                    # Prevent enforcement loop from moving us mid-play
+                    # self.manual_disconnect_guilds.add(guild.id) # Removed: Voice loop now respects playback
+                    # Ensure connection is ready
+                    for _ in range(20):
+                        if voice_client.is_connected():
+                            break
+                        await asyncio.sleep(0.25)
+                    await self._play_audio_file(voice_client, force=True)
                     return
                 else:
                     # Move to the new channel
                     await voice_client.move_to(channel)
             else:
                 # Connect to channel
-                voice_client = await channel.connect(cls=voice_recv.VoiceRecvClient)
+                voice_client = await channel.connect()
+
+            # Wait for connection to be ready
+            for _ in range(20):
+                if voice_client.is_connected():
+                    break
+                await asyncio.sleep(0.25)
+            if not voice_client.is_connected():
+                print("❌ Voice client failed to connect in time.")
+                return
             
-            # Start keep-alive to prevent Hugging Face disconnect
-            self._start_keep_alive(guild.id, voice_client)
+            # Stop keep-alive while we play the welcome audio (avoid interference)
+            self._stop_keep_alive(guild.id)
             
-            # Reset manual disconnect flag since we seem to be active
-            self.manual_disconnect = False
+            # Prevent enforcement loop from moving us mid-play
+            # self.manual_disconnect_guilds.add(guild.id) # Removed: Voice loop now respects playback
             
-            # Small delay to ensure connection is stable
-            await asyncio.sleep(0.5)
+            # Wait 2 seconds before playing welcome audio
+            print(f"⏳ Waiting 2.0s to settle in {channel.name}...")
+            await asyncio.sleep(2.0)
+            
+            # FIGHT BACK LOGIC:
+            # Check if we were yanked away by the other bot instance during the sleep
+            # If so, move back immediately before playing
+            try:
+                # Safety check: connection might have been cut
+                if not voice_client or not voice_client.is_connected():
+                    print("⚠️ Connection lost during wait. Attempting reconnect...")
+                    voice_client = await channel.connect()
+                
+                retries = 3
+                while retries > 0:
+                    # Double check connection
+                    if not voice_client.is_connected():
+                         print("⚠️ Lost connection during fight back loop.")
+                         break
+
+                    if voice_client.channel.id != channel.id:
+                        print(f"⚠️ Detected interference! Bot was moved to {voice_client.channel.name}. Fighting back to {channel.name}...")
+                        await voice_client.move_to(channel)
+                        await asyncio.sleep(0.5) # Wait a tiny bit for move to complete
+                        retries -= 1
+                    else:
+                        break
+                
+                # Final check
+                if voice_client.is_connected() and voice_client.channel.id != channel.id:
+                     print(f"❌ Could not maintain position in {channel.name}. Giving up on audio.")
+                     return
+            except Exception as e:
+                print(f"❌ Error during position enforcement: {e}")
+                # Don't return, try to play anyway if possible
             
             # Play the audio file
-            await self._play_audio_file(voice_client)
+            if voice_client and voice_client.is_connected():
+                await self._play_audio_file(voice_client, force=True)
+            else:
+                print("❌ Cannot play audio: Voice client not connected.")
             
             print(f"🔊 Auto-joined {channel.name} and playing audio for target user")
             
         except Exception as e:
             print(f"❌ Auto-join failed: {e}")
+        finally:
+            if channel and channel.guild:
+                self._auto_joining.discard(channel.guild.id)
+
+    def is_auto_joining(self, guild_id: int) -> bool:
+        return guild_id in self._auto_joining
 
     async def _attempt_rejoin(self, guild):
         """Attempt to rejoin the 'Manga_bot' channel after unexpected disconnect."""
@@ -658,7 +799,7 @@ class VoiceHandler:
                 self._start_keep_alive(guild.id, vc)
                 
                 print(f"✅ Successfully rejoined {target_channel.name}")
-                self.manual_disconnect = False
+                self.manual_disconnect_guilds.discard(guild.id)
                 
             except Exception as e:
                 print(f"❌ Failed to rejoin: {e}")
@@ -677,17 +818,28 @@ class VoiceHandler:
         return MockCtx(guild, invoker, voice_client, mock_send, None)
 
     
-    async def _play_audio_file(self, voice_client):
+    async def _play_audio_file(self, voice_client, force: bool = False):
         """
         Play the audio file in the voice channel.
         
         Args:
             voice_client: The voice client to play audio through
+            force: If True, stop any current playback to ensure audio plays
         """
         try:
             # Check if voice client is connected
             if not voice_client or not voice_client.is_connected():
                 print("❌ Voice client is not connected, cannot play audio")
+                return
+
+            # Check ffmpeg availability (allow override)
+            import shutil
+            ffmpeg_path = os.getenv("FFMPEG_PATH") or shutil.which("ffmpeg")
+            if not ffmpeg_path and os.path.exists("/usr/bin/ffmpeg"):
+                ffmpeg_path = "/usr/bin/ffmpeg"
+            if not ffmpeg_path:
+                print("❌ ffmpeg not found in PATH. Audio playback will fail.")
+                # asyncio.create_task(self._wait_and_return(voice_client))
                 return
             
             # Try multiple possible audio file locations
@@ -720,49 +872,86 @@ class VoiceHandler:
                 print(f"❌ Searched paths: {possible_paths}")
                 print(f"❌ Current working directory: {os.getcwd()}")
                 print(f"❌ __file__ location: {__file__}")
+                # asyncio.create_task(self._wait_and_return(voice_client))
                 return
             
-            # Wait if already playing something
-            while voice_client.is_playing():
-                await asyncio.sleep(0.1)
+            # If already playing something, optionally stop to ensure welcome plays
+            if voice_client.is_playing():
+                if force:
+                    voice_client.stop()
+                else:
+                    while voice_client.is_playing():
+                        await asyncio.sleep(0.1)
             
-            # Define callback to log when finished
-            def after_play(error):
+            # Define callback for when audio finishes
+            def after_playback(error):
                 if error:
                     print(f"❌ Audio playback error: {error}")
                 else:
                     print(f"✅ Finished playing: {self.AUTO_PLAY_AUDIO}")
-            
+                
+                # Trigger return to home channel
+                asyncio.run_coroutine_threadsafe(self._after_play_callback(voice_client), self.bot.loop)
+
             # Create audio source and play
             print(f"🔊 Playing audio from: {audio_path}")
-            audio_source = discord.FFmpegPCMAudio(audio_path)
-            voice_client.play(audio_source, after=after_play)
-            
-            print(f"🔊 Started playing: {self.AUTO_PLAY_AUDIO}")
-            
-            # Wait for audio to finish then return to Manga_bot
-            asyncio.create_task(self._wait_and_return(voice_client))
+            try:
+                audio_source = discord.FFmpegPCMAudio(
+                    audio_path,
+                    executable=ffmpeg_path,
+                    before_options="-nostdin",
+                    options="-vn",
+                )
+                voice_client.play(audio_source, after=after_playback)
+            except OSError as e:
+                print(f"❌ OSError during play (Socket closed?): {e}")
+                asyncio.create_task(self._after_play_callback(voice_client))
+                return
+
+            # Verify playback started
+            await asyncio.sleep(0.2)
+            if voice_client.is_playing():
+                print(f"🔊 Started playing: {self.AUTO_PLAY_AUDIO}")
+            else:
+                print(f"❌ Playback did not start for: {self.AUTO_PLAY_AUDIO}")
+                # If fail, force return immediately
+                asyncio.create_task(self._after_play_callback(voice_client))
             
         except Exception as e:
             import traceback
             print(f"❌ Failed to play audio: {e}")
+            import traceback
+            print(f"❌ Failed to play audio: {e}")
             traceback.print_exc()
+            asyncio.create_task(self._after_play_callback(voice_client))
             
-    async def _wait_and_return(self, voice_client):
-        """Wait for playback to finish and return to Manga_bot channel."""
-        while voice_client.is_playing():
-            await asyncio.sleep(0.1)
+    async def _after_play_callback(self, voice_client):
+        """Callback to return bot to home channel after playback."""
+        if not voice_client or not voice_client.guild:
+            return
+
+        try:
+            # Short delay to ensure audio is fully done
+            await asyncio.sleep(0.5)
             
-        # Return to Manga_bot channel
-        guild = voice_client.guild
-        manga_channel = discord.utils.get(guild.voice_channels, name="Manga_bot")
-        
-        if manga_channel and voice_client.channel != manga_channel:
-            try:
-                await voice_client.move_to(manga_channel)
-                print(f"🔙 Returned to {manga_channel.name}")
-            except Exception as e:
-                print(f"❌ Failed to return to home channel: {e}")
+            guild = voice_client.guild
+            target_channel = discord.utils.get(guild.voice_channels, name="Manga_bot")
+            
+            if target_channel and voice_client.channel != target_channel:
+                try:
+                    await voice_client.move_to(target_channel)
+                    print(f"🔙 Returned to {target_channel.name} (Event-Driven)")
+                    # Restart keep-alive in the new channel (resetting it)
+                    self._start_keep_alive(guild.id, voice_client)
+                except Exception as e:
+                    print(f"❌ Failed to return to home channel: {e}")
+            
+            # Ensure keep-alive is running
+            if voice_client.is_connected():
+                self._start_keep_alive(guild.id, voice_client)
+
+        except Exception as e:
+            print(f"❌ Error in after_play callback: {e}")
     
     # --- Keep-Alive Methods (Prevent Hugging Face Inactivity Disconnect) ---
     
@@ -774,6 +963,7 @@ class VoiceHandler:
         # Create new keep-alive task
         task = asyncio.create_task(self._keep_alive_loop(guild_id, voice_client))
         self.keep_alive_tasks[guild_id] = task
+        self.keep_alive_ping_count[guild_id] = 0
         print(f"💓 Keep-alive started for guild {guild_id}")
     
     def _stop_keep_alive(self, guild_id: int):
@@ -781,6 +971,7 @@ class VoiceHandler:
         if guild_id in self.keep_alive_tasks:
             self.keep_alive_tasks[guild_id].cancel()
             del self.keep_alive_tasks[guild_id]
+            self.keep_alive_ping_count.pop(guild_id, None)
             print(f"💔 Keep-alive stopped for guild {guild_id}")
     
     async def _keep_alive_loop(self, guild_id: int, voice_client):
@@ -799,7 +990,9 @@ class VoiceHandler:
                 
                 # Send silent audio to keep connection alive
                 await self._send_keep_alive_signal(voice_client)
-                print(f"💓 Keep-alive ping sent for guild {guild_id}")
+                self.keep_alive_ping_count[guild_id] = self.keep_alive_ping_count.get(guild_id, 0) + 1
+                if self.verbose_logs and self.keep_alive_ping_count[guild_id] % 10 == 0:
+                    print(f"💓 Keep-alive ping sent for guild {guild_id} ({self.keep_alive_ping_count[guild_id]})")
                 
         except asyncio.CancelledError:
             print(f"💔 Keep-alive cancelled for guild {guild_id}")
@@ -809,28 +1002,14 @@ class VoiceHandler:
     async def _send_keep_alive_signal(self, voice_client):
         """
         Send a keep-alive signal to maintain the connection.
-        Uses silent audio or voice state update.
+        Uses lightweight connection checks (avoids FFmpeg spawn overhead).
         """
         try:
-            # Don't interrupt if already playing audio
-            if voice_client.is_playing():
+            if not voice_client or not voice_client.is_connected():
                 return
-            
-            # Method 1: Create minimal silent audio using FFmpeg
-            # Generate 0.1s of silence
-            silent_source = discord.FFmpegPCMAudio(
-                "anullsrc=r=48000:cl=stereo",
-                before_options="-f lavfi -t 0.1"
-            )
-            voice_client.play(silent_source)
-            
-            # Wait for it to finish
-            while voice_client.is_playing():
-                await asyncio.sleep(0.05)
-                
+
+            # Accessing latency yields a low-cost heartbeat touch without audio playback.
+            _ = getattr(voice_client, "latency", None)
+            await asyncio.sleep(0)
         except Exception as e:
-            # Fallback: Just check connection state
-            print(f"⚠️ Keep-alive signal fallback: {e}")
-            # The act of checking is_connected() can help maintain the connection
-            if voice_client.is_connected():
-                pass  # Connection still active
+            self._debug(f"⚠️ Keep-alive signal fallback: {e}")

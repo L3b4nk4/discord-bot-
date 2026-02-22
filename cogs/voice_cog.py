@@ -5,6 +5,7 @@ import discord
 from discord.ext import commands
 import random
 import os
+import asyncio
 
 from voice import VoiceHandler
 
@@ -142,7 +143,47 @@ class VoiceCog(commands.Cog, name="Voice"):
     async def reset(self, ctx):
         """Listen to everyone again."""
         self.voice.set_owner_only(None)
+        self.voice.clear_allowed_users()
         await ctx.send("👂 Now listening to **everyone**")
+
+    @commands.command(name="vcaccess", aliases=["voiceaccess", "allow2"])
+    @commands.has_permissions(manage_guild=True)
+    async def vcaccess(self, ctx, user1: discord.Member = None, user2: discord.Member = None):
+        """Allow voice input from only 2 users. Usage: !vcaccess @user1 @user2"""
+        if user1 is None or user2 is None:
+            return await ctx.send("Usage: `!vcaccess @user1 @user2`")
+
+        allowed = {user1.id, user2.id}
+        self.voice.set_owner_only(None)
+        self.voice.set_allowed_users(allowed)
+        await ctx.send(
+            f"🔐 VC access limited to: **{user1.display_name}** and **{user2.display_name}**"
+        )
+
+    @commands.command(name="vcaccessoff", aliases=["voiceaccessoff", "allowall"])
+    @commands.has_permissions(manage_guild=True)
+    async def vcaccessoff(self, ctx):
+        """Disable VC access restriction and allow everyone."""
+        self.voice.clear_allowed_users()
+        self.voice.set_owner_only(None)
+        await ctx.send("🔓 VC access restriction disabled. Listening to everyone.")
+
+    @commands.command(name="vcaccesslist", aliases=["voiceaccesslist"])
+    async def vcaccesslist(self, ctx):
+        """Show who is currently allowed in VC access filter."""
+        if self.voice.owner_only and self.voice.owner_id:
+            user = self.bot.get_user(self.voice.owner_id)
+            name = user.display_name if user else str(self.voice.owner_id)
+            return await ctx.send(f"👤 Owner-only mode is ON: **{name}**")
+
+        if not self.voice.allowed_users:
+            return await ctx.send("🌐 VC access: everyone")
+
+        names = []
+        for uid in sorted(self.voice.allowed_users):
+            user = self.bot.get_user(uid)
+            names.append(user.display_name if user else f"Unknown ({uid})")
+        await ctx.send("🔐 VC access allowed users:\n" + "\n".join([f"• {n}" for n in names]))
     
     @commands.command(name="ignore", aliases=["block"])
     async def ignore(self, ctx, member: discord.Member):
@@ -201,6 +242,11 @@ class VoiceCog(commands.Cog, name="Voice"):
             embed.add_field(name="Owner Mode", value=f"👤 {owner_name}", inline=True)
         else:
             embed.add_field(name="Owner Mode", value="❌ Disabled", inline=True)
+
+        if self.voice.allowed_users:
+            embed.add_field(name="VC Access Filter", value=f"🔐 {len(self.voice.allowed_users)} users", inline=True)
+        else:
+            embed.add_field(name="VC Access Filter", value="🌐 Everyone", inline=True)
         
         keyword_status = "ON" if self.require_keyword else "OFF"
         embed.add_field(name="Keyword", value=f"{self.keyword} ({keyword_status})", inline=True)
@@ -325,7 +371,7 @@ class VoiceCog(commands.Cog, name="Voice"):
                     self.voice._start_keep_alive(guild.id, vc)
                     
                     # Reset manual disconnect flag
-                    self.voice.manual_disconnect = False
+                    self.voice.manual_disconnect_guilds.discard(guild.id)
                     
                     print(f"✅ Auto-joined '{channel_name}' in {guild.name}")
                     
@@ -344,7 +390,8 @@ class VoiceCog(commands.Cog, name="Voice"):
             print(f"❌ Error ensuring voice channel in {guild.name}: {e}")
     @commands.Cog.listener()
     async def on_ready(self):
-        """Start the voice enforcement loop and join immediately."""
+    
+        # Startup voice check
         print("🎙️ Startup: Checking voice channels for all guilds...", flush=True)
         for guild in self.bot.guilds:
             try:
@@ -352,46 +399,10 @@ class VoiceCog(commands.Cog, name="Voice"):
             except Exception as e:
                 print(f"❌ Startup voice error for {guild.name}: {e}", flush=True)
 
-        if not hasattr(self, 'enforce_loop_started'):
-            self.enforce_loop_started = True
-            self.bot.loop.create_task(self._enforce_voice_connection_loop())
+    # Loop removed in favor of event-driven architecture
+    # See voice/handler.py handle_voice_state_update and _after_play_callback
 
-    async def _enforce_voice_connection_loop(self):
-        """Constantly ensure bot is in 'Manga_bot' channel."""
-        await self.bot.wait_until_ready()
-        print("🔄 Voice enforcement loop started", flush=True)
-        
-        while not self.bot.is_closed():
-            for guild in self.bot.guilds:
-                # Debug logging
-                # print(f"🔍 [Loop] Checking guild: {guild.name}", flush=True)
-                
-                # Skip if manual disconnect flag is set (user commanded leave)
-                if self.voice.manual_disconnect:
-                    print(f"⚠️ [Loop] Skipping {guild.name} due to MANUAL DISCONNECT flag.", flush=True)
-                    continue
-                
-                try:
-                    # Check if actually connected
-                    if guild.voice_client and guild.voice_client.is_connected():
-                         # We are connected, but are we in the right channel?
-                         channel_name = "Manga_bot"
-                         if guild.voice_client.channel.name != channel_name:
-                             print(f"⚠️ [Loop] In wrong channel ({guild.voice_client.channel.name}), moving to {channel_name}...", flush=True)
-                             target = discord.utils.get(guild.voice_channels, name=channel_name)
-                             if target:
-                                 await guild.voice_client.move_to(target)
-                         else:
-                             # All good
-                             pass
-                    else:
-                        print(f"⚠️ [Loop] Not connected in {guild.name}, attempting auto-join...", flush=True)
-                        await self._ensure_voice_channel(guild)
-                        
-                except Exception as e:
-                    print(f"⚠️ Voice loop error for {guild.name}: {e}", flush=True)
-            
-            await asyncio.sleep(5)  # Check every 5 seconds
+
 
 
 

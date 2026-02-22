@@ -28,10 +28,15 @@ services:
       - .env
     volumes:
       - ./logs:/app/logs
+      - ./data:/data
     environment:
       - PYTHONUNBUFFERED=1
       - OLLAMA_HOST=http://ollama:11434
       - OLLAMA_MODEL=llama3.2
+      - AUTH_DB_ROOT=/app/auth_db
+      - AUTH_DB_BACKUP_DIR=/data/auth_db_backup
+      - AUTH_DB_BACKUP_INTERVAL=21600
+      - AUTH_DB_BACKUP_KEEP=48
 
 volumes:
   ollama_data:
