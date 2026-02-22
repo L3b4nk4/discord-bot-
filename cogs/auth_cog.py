@@ -2510,9 +2510,9 @@ class AuthCog(commands.Cog, name="Auth"):
         self.only_me_user_id = ctx.author.id
         await ctx.send(f"🔒 Text AI mode locked to {ctx.author.mention}.")
 
-    @commands.command(name="openall")
+    @commands.command(name="openall", aliases=["exit"])
     async def open_all_mode(self, ctx):
-        """Unlock text AI interactions for everyone."""
+        """Unlock text AI interactions for everyone (alias: !exit)."""
         is_server_owner = bool(ctx.guild and ctx.author.id == ctx.guild.owner_id)
         can_unlock = (
             self.only_me_user_id is None
@@ -2588,6 +2588,8 @@ class AuthCog(commands.Cog, name="Auth"):
     
     async def cog_check(self, ctx):
         """Global check for all commands in this cog."""
+        cmd_name = ctx.command.name if ctx.command else ""
+
         # 1. Check blacklist
         guild_id = ctx.guild.id if ctx.guild else None
         if self.is_blacklisted(ctx.author.id, guild_id):
@@ -2596,7 +2598,16 @@ class AuthCog(commands.Cog, name="Auth"):
         
         # 2. Check only_me mode
         if self.only_me_user_id is not None:
-            if ctx.author.id != self.only_me_user_id and not self.is_owner(ctx.author.id):
+            is_lock_owner = ctx.author.id == self.only_me_user_id
+            is_bot_owner = self.is_owner(ctx.author.id)
+            is_bot_admin = self.is_admin(ctx.author.id)
+            is_server_owner = bool(ctx.guild and ctx.author.id == ctx.guild.owner_id)
+
+            # Always allow unlocking from the unlock command.
+            if cmd_name == "openall" and (is_lock_owner or is_bot_admin or is_server_owner):
+                return True
+
+            if not (is_lock_owner or is_bot_owner):
                 return False
 
         # 3. Check dynamic overrides
@@ -2772,9 +2783,19 @@ def setup_global_check(bot, auth_cog):
     """Setup a global command check for the entire bot."""
     @bot.check
     async def global_auth_check(ctx):
+        cmd_name = ctx.command.name if ctx.command else ""
+
         # 1. Check only_me mode
         if auth_cog.only_me_user_id is not None:
-            if ctx.author.id != auth_cog.only_me_user_id and not auth_cog.is_owner(ctx.author.id):
+            is_lock_owner = ctx.author.id == auth_cog.only_me_user_id
+            is_bot_owner = auth_cog.is_owner(ctx.author.id)
+            is_bot_admin = auth_cog.is_admin(ctx.author.id)
+            is_server_owner = bool(ctx.guild and ctx.author.id == ctx.guild.owner_id)
+
+            if cmd_name == "openall" and (is_lock_owner or is_bot_admin or is_server_owner):
+                return True
+
+            if not (is_lock_owner or is_bot_owner):
                 return False
         
         # 2. Check blacklist

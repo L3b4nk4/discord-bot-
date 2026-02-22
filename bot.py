@@ -47,6 +47,7 @@ from voice import VoiceHandler
 
 # Import cogs
 from cogs import VoiceCog, ChatCog, AuthCog, HelpCog, AgentCog
+from cogs.auth_cog import setup_global_check
 
 
 class MangaBot(commands.Bot):
@@ -99,7 +100,9 @@ class MangaBot(commands.Bot):
         # Add cogs with their dependencies
         await self.add_cog(VoiceCog(self, self.voice_handler))
         # await self.add_cog(ChatCog(self, self.ai_service))
-        await self.add_cog(AuthCog(self))
+        auth_cog = AuthCog(self)
+        await self.add_cog(auth_cog)
+        setup_global_check(self, auth_cog)
         await self.add_cog(AgentCog(self, self.agent_service))
         await self.add_cog(HelpCog(self))
         

@@ -248,34 +248,7 @@ class UtilityCog(commands.Cog, name="Utility"):
         minutes, seconds = divmod(remainder, 60)
         await ctx.send(f"⏱️ Uptime: **{hours}h {minutes}m {seconds}s**")
     
-    # --- Access Control (Utility) ---
-    
-    @commands.command(name="onlyme")
-    async def only_me(self, ctx):
-        """Restrict bot to only accept commands from you."""
-        auth = self.bot.get_cog("Auth") or self.bot.get_cog("AuthCog")
-        if not auth:
-            return await ctx.send("❌ Auth system not loaded.")
-            
-        auth.only_me_user_id = ctx.author.id
-        await ctx.send(f"🔒 **Only Me Mode Enabled** - Bot will now only respond to **{ctx.author.display_name}**.")
-    
-    @commands.command(name="openall")
-    async def open_all(self, ctx):
-        """Disable 'only me' mode and allow everyone to use commands."""
-        auth = self.bot.get_cog("Auth") or self.bot.get_cog("AuthCog")
-        if not auth:
-            return await ctx.send("❌ Auth system not loaded.")
-            
-        # Only the person who enabled it (or owner/admin) can disable it
-        if auth.only_me_user_id is None:
-            return await ctx.send("ℹ️ Only Me mode is not active.")
-        
-        if ctx.author.id != auth.only_me_user_id and not auth.is_admin(ctx.author.id):
-            return await ctx.send("❌ Only the person who enabled this mode can disable it.")
-        
-        auth.only_me_user_id = None
-        await ctx.send("🔓 **Only Me Mode Disabled** - Bot now responds to everyone.")
+    # Access control commands (`!onlyme`, `!openall`) live in AuthCog.
 
 
 async def setup(bot):

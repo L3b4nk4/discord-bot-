@@ -304,7 +304,7 @@ async def keep_alive_task(port: int):
                     else:
                         print(f"⚠️ Keep-alive ping returned status: {resp.status}")
         except asyncio.CancelledError:
-            print("💔 Keep-alive task cancelled")
+            print("ℹ️ Keep-alive task stopped")
             break
         except Exception as e:
             print(f"⚠️ Keep-alive ping failed: {e} - retrying in {KEEP_ALIVE_INTERVAL}s")
