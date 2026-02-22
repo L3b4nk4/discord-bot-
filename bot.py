@@ -7,6 +7,7 @@ import discord
 import discord.opus
 from discord.ext import commands
 import os
+import re
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -142,22 +143,38 @@ class MangaBot(commands.Bot):
                     pass
             return
 
-        # Natural assistant actions (e.g. "hey manga create role X").
-        try:
-            agent_cog = self.get_cog("Agent")
-            if agent_cog and hasattr(agent_cog, "handle_natural_request"):
-                handled = await agent_cog.handle_natural_request(message)
-                if handled:
-                    return
-        except Exception as e:
-            print(f"⚠️ Natural assistant handler error: {e}")
+        mentioned = self.user.mentioned_in(message)
+        auth_cog = self.get_cog("Auth") or self.get_cog("AuthCog")
+        only_me_user_id = getattr(auth_cog, "only_me_user_id", None) if auth_cog else None
+        is_onlyme_allowed = True
+        if only_me_user_id is not None:
+            is_owner = False
+            if auth_cog and hasattr(auth_cog, "is_owner"):
+                try:
+                    is_owner = bool(auth_cog.is_owner(message.author.id))
+                except Exception:
+                    is_owner = False
+            is_onlyme_allowed = message.author.id == only_me_user_id or is_owner
+
+        # Natural assistant actions are mention-only.
+        if mentioned and is_onlyme_allowed:
+            try:
+                agent_cog = self.get_cog("Agent")
+                if agent_cog and hasattr(agent_cog, "handle_natural_request"):
+                    handled = await agent_cog.handle_natural_request(message)
+                    if handled:
+                        return
+            except Exception as e:
+                print(f"⚠️ Natural assistant handler error: {e}")
         
         # Process commands
         await self.process_commands(message)
         
         # Respond when mentioned (if not a command)
-        if self.user.mentioned_in(message) and not message.content.startswith("!"):
-            clean_text = message.content.replace(f"<@{self.user.id}>", "").strip()
+        if mentioned and not message.content.startswith("!"):
+            if not is_onlyme_allowed:
+                return
+            clean_text = re.sub(rf"<@!?{self.user.id}>", "", message.content or "").strip()
             
             if clean_text and self.ai_service.enabled:
                 async with message.channel.typing():
@@ -166,6 +183,11 @@ class MangaBot(commands.Bot):
                         clean_text
                     )
                     await message.reply(response)
+            elif clean_text:
+                await message.reply(
+                    "❌ AI is not configured. Set `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, or `GROQ_API_KEY`.",
+                    mention_author=False,
+                )
     
     async def on_command_error(self, ctx, error):
         """Handle command errors."""

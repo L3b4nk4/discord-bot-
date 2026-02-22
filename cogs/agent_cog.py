@@ -133,6 +133,9 @@ class AgentCog(commands.Cog, name="Agent"):
         """
         if not message.guild or message.author.bot:
             return False
+        if not self.bot.user or not self.bot.user.mentioned_in(message):
+            # Mention-only behavior for natural AI actions.
+            return False
 
         prompt = self._extract_natural_prompt(message.content)
         if not prompt:

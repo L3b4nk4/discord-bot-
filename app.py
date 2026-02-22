@@ -28,6 +28,7 @@ import signal
 import random
 import telegram
 import json
+from services.openrouter_config import OPENROUTER_BASE as DEFAULT_OPENROUTER_BASE
 
 # Optional: Google GenAI SDK
 try:
@@ -71,7 +72,10 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat")
+OPENROUTER_BASE = DEFAULT_OPENROUTER_BASE
 
 # Configure Groq
 groq_client = None
@@ -92,6 +96,9 @@ if GEMINI_API_KEY and GENAI_AVAILABLE:
 elif GEMINI_API_KEY and not GENAI_AVAILABLE:
     print("⚠️ GEMINI_API_KEY found but google-genai is not installed.")
 
+if OPENROUTER_API_KEY:
+    print(f"✅ OpenRouter Configured ({OPENROUTER_MODEL})")
+
 
 def _run_gemini_generate(prompt: str) -> str:
     if not gemini_client:
@@ -109,33 +116,77 @@ def _run_gemini_generate(prompt: str) -> str:
         return text.strip()
     raise RuntimeError("Gemini returned no text")
 
+
+def _run_groq_generate(prompt: str) -> str:
+    if not groq_client:
+        raise RuntimeError("Groq client unavailable")
+    completion = groq_client.chat.completions.create(
+        messages=[
+            {"role": "system", "content": "You are a helpful and witty Discord bot named Manga."},
+            {"role": "user", "content": prompt},
+        ],
+        model="llama-3.3-70b-versatile",
+    )
+    return completion.choices[0].message.content.strip()
+
+
+async def _generate_openrouter(prompt: str) -> str:
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OpenRouter key unavailable")
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/your-project",
+    }
+    payload = {
+        "model": OPENROUTER_MODEL,
+        "messages": [
+            {"role": "system", "content": "You are Manga, a helpful and witty Discord bot."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.7,
+        "max_tokens": 1024,
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{OPENROUTER_BASE}/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=60),
+        ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                raise RuntimeError(f"OpenRouter HTTP {resp.status}: {body[:200]}")
+            data = await resp.json()
+            return data["choices"][0]["message"]["content"].strip()
+
 # Configure LLM Agent (Ollama - free, local)
 from services.llm_agent_service import LLMAgentService
 llm_agent = LLMAgentService()
 
 async def ai_generate(prompt):
-    """Helper to generate AI content using Gemini SDK, with Groq fallback."""
+    """Helper to generate AI content using Gemini, OpenRouter, then Groq fallback."""
     if gemini_client:
         try:
             return await asyncio.to_thread(_run_gemini_generate, prompt)
         except Exception as e:
             print(f"⚠️ Gemini generation failed: {e}")
 
-    if not groq_client:
-        return "I need my AI brain (Gemini or Groq) to do that."
-    try:
-        chat_completion = await asyncio.to_thread(
-            groq_client.chat.completions.create,
-            messages=[
-                {"role": "system", "content": "You are a helpful and witty Discord bot named Manga."},
-                {"role": "user", "content": prompt}
-            ],
-            model="llama-3.3-70b-versatile",
-        )
-        return chat_completion.choices[0].message.content.strip()
-    except Exception as e:
-        print(f"AI Generation Error: {e}")
-        return "I'm having trouble thinking right now."
+    if OPENROUTER_API_KEY:
+        try:
+            return await _generate_openrouter(prompt)
+        except Exception as e:
+            print(f"⚠️ OpenRouter generation failed: {e}")
+
+    if groq_client:
+        try:
+            return await asyncio.to_thread(_run_groq_generate, prompt)
+        except Exception as e:
+            print(f"⚠️ Groq generation failed: {e}")
+
+    return "I need my AI brain (Gemini, Groq, or OpenRouter) to do that."
 
 async def shutdown_telegram(signal_name):
     """Cleanup Telegram on shutdown."""
@@ -213,9 +264,14 @@ VOICE_KEYWORD = "manga"
 IGNORED_USERS = set()
 AI_PERSONA = "helpful"
 START_TIME = datetime.now()
+TEXT_ONLY_ME_USER_ID = None
+
+def _strip_bot_mentions(text: str, user_id: int) -> str:
+    return re.sub(rf"<@!?{user_id}>", "", text or "").strip()
 
 @bot.event
 async def on_message(message):
+    global TEXT_ONLY_ME_USER_ID
     if message.author == bot.user: return
 
     if message.content.startswith("!send "):
@@ -238,37 +294,56 @@ async def on_message(message):
         await bot.process_commands(message)
         return
 
-    if groq_client:
-        if bot.user.mentioned_in(message):
-            try:
-                clean_text = message.content.replace(f"<@{bot.user.id}>", "").strip()
-                if not clean_text: return
-                async with message.channel.typing():
-                    chat_prompt = f"User '{message.author.display_name}' said: '{clean_text}'. Reply concisely."
-                    response_text = await ai_generate(chat_prompt)
-                    await message.reply(response_text)
-                    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-                        try:
-                            temp_bot = telegram.Bot(TELEGRAM_TOKEN)
-                            await temp_bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"💬 **Discord AI Reply:**\n{response_text}")
-                        except: pass
-            except Exception as e:
-                print(f"AI Chat Error: {e}")
+    # Mention-only text AI.
+    if bot.user.mentioned_in(message):
+        # !onlyme text lock: silently ignore other users.
+        if TEXT_ONLY_ME_USER_ID is not None and message.author.id != TEXT_ONLY_ME_USER_ID:
+            return
+
+        try:
+            clean_text = _strip_bot_mentions(message.content, bot.user.id)
+            if not clean_text:
+                return
+            async with message.channel.typing():
+                chat_prompt = f"User '{message.author.display_name}' said: '{clean_text}'. Reply concisely."
+                response_text = await ai_generate(chat_prompt)
+                await message.reply(response_text)
+                if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+                    try:
+                        temp_bot = telegram.Bot(TELEGRAM_TOKEN)
+                        await temp_bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"💬 **Discord AI Reply:**\n{response_text}")
+                    except:
+                        pass
+        except Exception as e:
+            print(f"AI Chat Error: {e}")
 
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
-        if groq_client:
-            try:
-                clean_text = ctx.message.content.replace(bot.command_prefix, "", 1).strip()
-                if not clean_text: return
-                async with ctx.channel.typing():
-                    chat_prompt = f"User '{ctx.author.display_name}' said: '{clean_text}' (unknown command). Reply helpfully."
-                    response_text = await ai_generate(chat_prompt)
-                    await ctx.reply(response_text)
-            except: pass
+        # Mention-only mode: ignore unknown commands.
+        return
     else:
         print(f"⚠️ Command Error: {error}")
+
+
+@bot.check
+async def onlyme_command_gate(ctx):
+    """If !onlyme text lock is active, restrict command usage too."""
+    if TEXT_ONLY_ME_USER_ID is None:
+        return True
+
+    if ctx.author.id == TEXT_ONLY_ME_USER_ID:
+        return True
+
+    # Allow server owner/admin to unlock with !openall.
+    is_admin = bool(ctx.guild and ctx.author.guild_permissions.administrator)
+    is_server_owner = bool(ctx.guild and ctx.author.id == ctx.guild.owner_id)
+    cmd_name = ctx.command.name if ctx.command else ""
+    if cmd_name == "openall" and (is_admin or is_server_owner):
+        return True
+
+    await ctx.send("🔒 Bot is locked by `!onlyme`. Commands are allowed only for the lock owner.")
+    return False
 
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -728,6 +803,30 @@ async def unignore(ctx, m: discord.Member):
 async def reset(ctx):
     global OWNER_ID; OWNER_ID = None; IGNORED_USERS.clear()
     await ctx.send("👥 Reset. Listening to everyone.")
+
+@bot.command(name="onlyme")
+async def onlyme_text(ctx):
+    """Lock text mentions + commands to command author only."""
+    global TEXT_ONLY_ME_USER_ID
+    if not (ctx.author.guild_permissions.administrator or ctx.author.id == ctx.guild.owner_id):
+        return await ctx.send("❌ Only server admins can enable onlyme text mode.")
+    TEXT_ONLY_ME_USER_ID = ctx.author.id
+    await ctx.send(f"🔒 Text bot mode is now locked to {ctx.author.mention} (mentions + commands).")
+
+@bot.command(name="openall")
+async def openall_text(ctx):
+    """Unlock text mentions + commands for everyone."""
+    global TEXT_ONLY_ME_USER_ID
+    if TEXT_ONLY_ME_USER_ID is not None:
+        can_unlock = (
+            ctx.author.id == TEXT_ONLY_ME_USER_ID
+            or ctx.author.guild_permissions.administrator
+            or ctx.author.id == ctx.guild.owner_id
+        )
+        if not can_unlock:
+            return await ctx.send("❌ Only the lock owner or an admin can disable onlyme text mode.")
+    TEXT_ONLY_ME_USER_ID = None
+    await ctx.send("🔓 Text bot mode is now open to everyone.")
 
 # --- TROLL ---
 @bot.command()

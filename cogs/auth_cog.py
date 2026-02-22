@@ -15,6 +15,7 @@ import shutil
 import sqlite3
 import threading
 from pathlib import Path
+from storage_utils import has_db_files
 
 try:
     import firebase_admin
@@ -38,6 +39,18 @@ def _default_auth_data() -> dict:
         "command_overrides": {},   # Guild -> CommandName -> {disabled, allowed_roles, allowed_users}
         "autokick": {}             # Guild -> {enabled, min_age_days}
     }
+
+
+def _normalize_int_list(values) -> list:
+    if not isinstance(values, list):
+        return []
+    out = []
+    for value in values:
+        try:
+            out.append(int(value))
+        except Exception:
+            continue
+    return sorted(set(out))
 
 
 class AuthSQLiteStore:
@@ -418,18 +431,6 @@ class AuthFirebaseStore:
         self._global_doc = self._base_doc.collection("meta").document("global")
         self._guilds = self._base_doc.collection("guilds")
 
-    @staticmethod
-    def _normalize_int_list(values) -> list:
-        if not isinstance(values, list):
-            return []
-        out = []
-        for value in values:
-            try:
-                out.append(int(value))
-            except Exception:
-                continue
-        return sorted(set(out))
-
     @classmethod
     def _normalize_reaction_roles(cls, reaction_roles):
         if not isinstance(reaction_roles, dict):
@@ -472,8 +473,8 @@ class AuthFirebaseStore:
                 continue
             normalized[command_name] = {
                 "disabled": bool(cfg.get("disabled", False)),
-                "allowed_roles": cls._normalize_int_list(cfg.get("allowed_roles", [])),
-                "allowed_users": cls._normalize_int_list(cfg.get("allowed_users", [])),
+                "allowed_roles": _normalize_int_list(cfg.get("allowed_roles", [])),
+                "allowed_users": _normalize_int_list(cfg.get("allowed_users", [])),
             }
         return normalized
 
@@ -489,9 +490,9 @@ class AuthFirebaseStore:
     @classmethod
     def _sanitize_guild_payload(cls, payload: dict) -> dict:
         return {
-            "verified_users": cls._normalize_int_list(payload.get("verified_users", [])),
-            "blacklisted": cls._normalize_int_list(payload.get("blacklisted", [])),
-            "whitelisted": cls._normalize_int_list(payload.get("whitelisted", [])),
+            "verified_users": _normalize_int_list(payload.get("verified_users", [])),
+            "blacklisted": _normalize_int_list(payload.get("blacklisted", [])),
+            "whitelisted": _normalize_int_list(payload.get("whitelisted", [])),
             "reaction_roles": cls._normalize_reaction_roles(payload.get("reaction_roles", {})),
             "command_overrides": cls._normalize_overrides(payload.get("command_overrides", {})),
             "autokick": cls._normalize_autokick(payload.get("autokick", {})),
@@ -503,8 +504,8 @@ class AuthFirebaseStore:
         global_payload = self._global_doc.get()
         if global_payload.exists:
             raw_global = global_payload.to_dict() or {}
-            data["admins"] = self._normalize_int_list(raw_global.get("admins", []))
-            data["moderators"] = self._normalize_int_list(raw_global.get("moderators", []))
+            data["admins"] = _normalize_int_list(raw_global.get("admins", []))
+            data["moderators"] = _normalize_int_list(raw_global.get("moderators", []))
 
         for guild_doc in self._guilds.stream():
             guild_key = str(guild_doc.id)
@@ -527,8 +528,8 @@ class AuthFirebaseStore:
 
     def save_global(self, data: dict):
         payload = {
-            "admins": self._normalize_int_list(data.get("admins", [])),
-            "moderators": self._normalize_int_list(data.get("moderators", [])),
+            "admins": _normalize_int_list(data.get("admins", [])),
+            "moderators": _normalize_int_list(data.get("moderators", [])),
         }
         self._global_doc.set(payload)
 
@@ -1078,12 +1079,8 @@ class AuthCog(commands.Cog, name="Auth"):
             pass
 
     @staticmethod
-    def _has_db_files(db_root: Path) -> bool:
-        return any(db_root.rglob("*.db"))
-
-    @staticmethod
     def _create_backup_snapshot_sync(db_root: Path, backup_root: Path, keep: int):
-        if not db_root.exists() or not AuthCog._has_db_files(db_root):
+        if not db_root.exists() or not has_db_files(db_root):
             return None
 
         backup_root.mkdir(parents=True, exist_ok=True)
@@ -1150,25 +1147,13 @@ class AuthCog(commands.Cog, name="Auth"):
             return False
         return not any(data.get(key) for key in ("verified_users", "blacklisted", "whitelisted", "reaction_roles", "command_overrides", "autokick"))
 
-    @staticmethod
-    def _normalize_int_list(values) -> list:
-        if not isinstance(values, list):
-            return []
-        out = []
-        for value in values:
-            try:
-                out.append(int(value))
-            except Exception:
-                continue
-        return sorted(set(out))
-
     def _normalize_guild_list_map(self, values) -> dict:
         out = {}
         if not isinstance(values, dict):
             return out
         for guild_key, user_ids in values.items():
             key = str(guild_key)
-            normalized = self._normalize_int_list(user_ids)
+            normalized = _normalize_int_list(user_ids)
             if normalized:
                 out[key] = normalized
         return out
@@ -1228,8 +1213,8 @@ class AuthCog(commands.Cog, name="Auth"):
             return {}
         return {
             "disabled": bool(value.get("disabled", False)),
-            "allowed_roles": self._normalize_int_list(value.get("allowed_roles", [])),
-            "allowed_users": self._normalize_int_list(value.get("allowed_users", [])),
+            "allowed_roles": _normalize_int_list(value.get("allowed_roles", [])),
+            "allowed_users": _normalize_int_list(value.get("allowed_users", [])),
         }
 
     def _normalize_command_overrides(self, values, known_guilds) -> dict:
@@ -1267,8 +1252,8 @@ class AuthCog(commands.Cog, name="Auth"):
     def _migrate_legacy_json(self, raw: dict) -> dict:
         migrated = _default_auth_data()
 
-        migrated["admins"] = self._normalize_int_list(raw.get("admins", []))
-        migrated["moderators"] = self._normalize_int_list(raw.get("moderators", []))
+        migrated["admins"] = _normalize_int_list(raw.get("admins", []))
+        migrated["moderators"] = _normalize_int_list(raw.get("moderators", []))
         migrated["verified_users"] = self._normalize_guild_list_map(raw.get("verified_users", {}))
         migrated["whitelisted"] = self._normalize_guild_list_map(raw.get("whitelisted", {}))
         migrated["reaction_roles"] = self._normalize_reaction_roles(raw.get("reaction_roles", {}))
@@ -1290,7 +1275,7 @@ class AuthCog(commands.Cog, name="Auth"):
 
         raw_blacklisted = raw.get("blacklisted", {})
         if isinstance(raw_blacklisted, list):
-            normalized = self._normalize_int_list(raw_blacklisted)
+            normalized = _normalize_int_list(raw_blacklisted)
             if normalized:
                 if known_guilds:
                     for guild_key in known_guilds:
@@ -2512,6 +2497,31 @@ class AuthCog(commands.Cog, name="Auth"):
     
     # --- Only Me Mode ---
     
+    @commands.command(name="onlyme")
+    async def only_me_mode(self, ctx):
+        """Lock text AI interactions to the command author only."""
+        is_server_owner = bool(ctx.guild and ctx.author.id == ctx.guild.owner_id)
+        if not (self.is_admin(ctx.author.id) or is_server_owner):
+            return await ctx.send("❌ Only bot admins or the server owner can enable `!onlyme`.")
+
+        self.only_me_user_id = ctx.author.id
+        await ctx.send(f"🔒 Text AI mode locked to {ctx.author.mention}.")
+
+    @commands.command(name="openall")
+    async def open_all_mode(self, ctx):
+        """Unlock text AI interactions for everyone."""
+        is_server_owner = bool(ctx.guild and ctx.author.id == ctx.guild.owner_id)
+        can_unlock = (
+            self.only_me_user_id is None
+            or ctx.author.id == self.only_me_user_id
+            or self.is_admin(ctx.author.id)
+            or is_server_owner
+        )
+        if not can_unlock:
+            return await ctx.send("❌ Only the current lock owner, bot admin, or server owner can run `!openall`.")
+
+        self.only_me_user_id = None
+        await ctx.send("🔓 Text AI mode unlocked for everyone.")
 
     
 

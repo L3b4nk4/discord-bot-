@@ -5,9 +5,11 @@ No local setup required - uses OpenRouter's free API models.
 import asyncio
 import aiohttp
 import os
+from services.http_session_mixin import HTTPSessionMixin
+from services.openrouter_config import OPENROUTER_BASE
 
 
-class LLMAgentService:
+class LLMAgentService(HTTPSessionMixin):
     """Handles LLM operations using OpenRouter (free cloud API)."""
     
     # Free models on OpenRouter
@@ -26,7 +28,7 @@ class LLMAgentService:
         # OpenRouter config
         self.api_key = os.getenv('OPENROUTER_API_KEY')
         self.default_model = default_model or os.getenv('OPENROUTER_MODEL', self.FREE_MODELS[0])
-        self.base_url = "https://openrouter.ai/api/v1"
+        self.base_url = OPENROUTER_BASE
         
         # Check if we have API key
         if self.api_key:
@@ -37,12 +39,6 @@ class LLMAgentService:
             self.init_error = "No OPENROUTER_API_KEY set. Get free key at openrouter.ai"
             print(f"⚠️ LLM Agent: {self.init_error}")
         
-    async def _get_session(self):
-        """Get or create aiohttp session."""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
-    
     async def ensure_ready(self):
         """Ensure the service is ready."""
         return self.enabled
@@ -121,7 +117,3 @@ Provide a clear, actionable response. If the task requires multiple steps, list 
         
         return await self.prompt(prompt, model)
     
-    async def close(self):
-        """Close the aiohttp session."""
-        if self._session and not self._session.closed:
-            await self._session.close()

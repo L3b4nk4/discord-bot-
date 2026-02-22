@@ -12,6 +12,7 @@ from pathlib import Path
 from datetime import datetime
 from aiohttp import web
 from dotenv import load_dotenv
+from storage_utils import has_db_files
 
 # Keep-alive interval (seconds) - configurable for platform limits
 KEEP_ALIVE_INTERVAL = int(os.getenv("KEEP_ALIVE_INTERVAL", "60"))
@@ -90,10 +91,6 @@ from bot import MangaBot
 from services.telegram_service import TelegramService
 
 # --- 3. Persistence Setup ---
-def _has_db_files(db_root: Path) -> bool:
-    return any(db_root.rglob("*.db"))
-
-
 def _is_huggingface_space() -> bool:
     return bool(os.getenv("SPACE_ID") or os.getenv("SPACE_HOST") or os.getenv("HF_SPACE_ID"))
 
@@ -136,7 +133,7 @@ def _latest_backup_snapshot(backup_root: Path):
 def _restore_auth_from_latest_backup(db_root: Path, backup_root: Path):
     """If DB root is empty/missing, restore it from the latest backup snapshot."""
     db_root.mkdir(parents=True, exist_ok=True)
-    if _has_db_files(db_root):
+    if has_db_files(db_root):
         return
 
     latest = _latest_backup_snapshot(backup_root)
@@ -149,7 +146,7 @@ def _restore_auth_from_latest_backup(db_root: Path, backup_root: Path):
 
 def _create_auth_backup_snapshot(db_root: Path, backup_root: Path, keep: int):
     """Create a snapshot backup of the auth DB directory and prune old snapshots."""
-    if not db_root.exists() or not _has_db_files(db_root):
+    if not db_root.exists() or not has_db_files(db_root):
         return None
 
     backup_root.mkdir(parents=True, exist_ok=True)

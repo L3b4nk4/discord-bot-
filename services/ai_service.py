@@ -5,6 +5,8 @@ Supports Gemini, OpenRouter (FREE), and Groq.
 import asyncio
 import os
 import aiohttp
+from services.http_session_mixin import HTTPSessionMixin
+from services.openrouter_config import OPENROUTER_BASE
 
 # Optional: Import Google GenAI SDK
 try:
@@ -22,7 +24,7 @@ except ImportError:
     GROQ_AVAILABLE = False
 
 
-class AIService:
+class AIService(HTTPSessionMixin):
     """Handles all AI-related operations using Gemini/OpenRouter/Groq."""
     
     # Free models on OpenRouter (no API credits needed)
@@ -60,7 +62,7 @@ class AIService:
         # OpenRouter config
         self.openrouter_key = os.getenv("OPENROUTER_API_KEY")
         self.openrouter_model = os.getenv("OPENROUTER_MODEL", self.FREE_MODELS[0])
-        self.openrouter_base = "https://openrouter.ai/api/v1"
+        self.openrouter_base = OPENROUTER_BASE
         
         # Groq fallback config
         self.groq_client = None
@@ -110,10 +112,10 @@ class AIService:
     def _init_gemini_or_fallback(self, groq_key: str):
         if self._init_gemini():
             return
-        # Requested fallback: Gemini -> Groq (then OpenRouter as final fallback).
-        if self._init_groq(groq_key):
+        # Requested fallback: Gemini -> OpenRouter -> Groq.
+        if self._init_openrouter():
             return
-        self._init_openrouter()
+        self._init_groq(groq_key)
 
     def _init_openrouter_or_fallback(self, groq_key: str):
         if self._init_openrouter():
@@ -130,12 +132,6 @@ class AIService:
         print("❌ AI Service: No API keys found.")
         print("   Set GEMINI_API_KEY and/or GROQ_API_KEY and/or OPENROUTER_API_KEY")
     
-    async def _get_session(self):
-        """Get or create aiohttp session."""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
-
     def _run_gemini(self, prompt: str, model: str) -> str:
         if not self.gemini_client:
             raise RuntimeError("Gemini SDK client is not initialized.")
@@ -284,19 +280,18 @@ class AIService:
             if not self._is_error_response(gemini_result):
                 return gemini_result
 
-            # Requested fallback path: if Gemini fails, use Groq.
-            if self.groq_client:
-                print("🔄 Gemini failed, falling back to Groq.")
-                groq_result = await self.generate_groq(prompt)
-                if not self._is_error_response(groq_result):
-                    return groq_result
-
-            # Final optional fallback if Groq is unavailable/fails.
+            # Requested fallback path: Gemini -> OpenRouter -> Groq.
             if self.openrouter_key:
-                print("🔄 Gemini/Groq failed, falling back to OpenRouter.")
+                print("🔄 Gemini failed, falling back to OpenRouter.")
                 openrouter_result = await self.generate_openrouter(prompt)
                 if not self._is_error_response(openrouter_result):
                     return openrouter_result
+
+            if self.groq_client:
+                print("🔄 Gemini/OpenRouter failed, falling back to Groq.")
+                groq_result = await self.generate_groq(prompt)
+                if not self._is_error_response(groq_result):
+                    return groq_result
 
             return gemini_result
         elif self.provider == "openrouter":
@@ -328,7 +323,3 @@ Reply conversationally in 1-2 short sentences. Be friendly and natural."""
             lines.append(f"{marker}`{m}`")
         return "\n".join(lines)
     
-    async def close(self):
-        """Close the aiohttp session."""
-        if self._session and not self._session.closed:
-            await self._session.close()
