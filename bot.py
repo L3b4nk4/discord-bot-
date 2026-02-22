@@ -141,6 +141,16 @@ class MangaBot(commands.Bot):
                 except Exception:
                     pass
             return
+
+        # Natural assistant actions (e.g. "hey manga create role X").
+        try:
+            agent_cog = self.get_cog("Agent")
+            if agent_cog and hasattr(agent_cog, "handle_natural_request"):
+                handled = await agent_cog.handle_natural_request(message)
+                if handled:
+                    return
+        except Exception as e:
+            print(f"⚠️ Natural assistant handler error: {e}")
         
         # Process commands
         await self.process_commands(message)

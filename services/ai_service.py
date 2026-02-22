@@ -1,6 +1,6 @@
 """
 AI Service - Handles all AI-related operations.
-Supports OpenRouter (FREE) and Groq as fallback.
+Supports Gemini, OpenRouter (FREE), and Groq.
 """
 import asyncio
 import os
@@ -15,7 +15,7 @@ except ImportError:
 
 
 class AIService:
-    """Handles all AI-related operations using OpenRouter (free) or Groq."""
+    """Handles all AI-related operations using Gemini/OpenRouter/Groq."""
     
     # Free models on OpenRouter (no API credits needed)
     FREE_MODELS = [
@@ -29,6 +29,18 @@ class AIService:
         self.enabled = False
         self.provider = "none"
         self._session = None
+        self.system_prompt = (
+            "You are Manga, a Discord bot assistant. "
+            "Be accurate, concise, and action-oriented."
+        )
+
+        # Optional provider selector (auto|gemini|openrouter|groq)
+        self.preferred_provider = os.getenv("AI_PROVIDER", "auto").strip().lower()
+
+        # Gemini config
+        self.gemini_key = os.getenv("GEMINI_API_KEY")
+        self.gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        self.gemini_base = "https://generativelanguage.googleapis.com/v1beta"
         
         # OpenRouter config
         self.openrouter_key = os.getenv("OPENROUTER_API_KEY")
@@ -38,31 +50,109 @@ class AIService:
         # Groq fallback config
         self.groq_client = None
         groq_key = os.getenv("GROQ_API_KEY")
-        
-        # 1. Try OpenRouter first (FREE!)
+
+        # Provider init order.
+        if self.preferred_provider in {"gemini", "google"}:
+            self._init_gemini_or_fallback(groq_key)
+        elif self.preferred_provider in {"openrouter", "or"}:
+            self._init_openrouter_or_fallback(groq_key)
+        elif self.preferred_provider in {"groq"}:
+            self._init_groq_or_fallback(groq_key)
+        else:
+            # Auto mode: Gemini -> OpenRouter -> Groq
+            self._init_gemini_or_fallback(groq_key)
+
+    def _init_gemini_or_fallback(self, groq_key: str):
+        if self.gemini_key:
+            self.enabled = True
+            self.provider = "gemini"
+            print("✅ AI Service: Gemini initialized")
+            print(f"   Model: {self.gemini_model}")
+            return
+        self._init_openrouter_or_fallback(groq_key)
+
+    def _init_openrouter_or_fallback(self, groq_key: str):
         if self.openrouter_key:
             self.enabled = True
             self.provider = "openrouter"
-            print(f"✅ AI Service: OpenRouter initialized (FREE)")
+            print("✅ AI Service: OpenRouter initialized (FREE)")
             print(f"   Model: {self.openrouter_model}")
-        # 2. Fallback to Groq
-        elif groq_key and GROQ_AVAILABLE:
+            return
+        self._init_groq_or_fallback(groq_key)
+
+    def _init_groq_or_fallback(self, groq_key: str):
+        if groq_key and GROQ_AVAILABLE:
             try:
                 self.groq_client = Groq(api_key=groq_key)
                 self.enabled = True
                 self.provider = "groq"
-                print("✅ AI Service: Groq initialized (Fallback)")
+                print("✅ AI Service: Groq initialized")
+                return
             except Exception as e:
                 print(f"⚠️ AI Service: Failed to init Groq - {e}")
-        else:
-            print("❌ AI Service: No API keys found. Set OPENROUTER_API_KEY (free!)")
-            print("   Get yours at: https://openrouter.ai (no credit card needed)")
+
+        print("❌ AI Service: No API keys found.")
+        print("   Set GEMINI_API_KEY or OPENROUTER_API_KEY or GROQ_API_KEY")
     
     async def _get_session(self):
         """Get or create aiohttp session."""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
+
+    async def generate_gemini(self, prompt: str, model: str = None) -> str:
+        """Generate text using Google Gemini API."""
+        if not self.gemini_key:
+            return "Gemini is not configured."
+
+        model = model or self.gemini_model
+        url = f"{self.gemini_base}/models/{model}:generateContent?key={self.gemini_key}"
+
+        payload = {
+            "systemInstruction": {
+                "parts": [{"text": self.system_prompt}]
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt}],
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.7,
+                "maxOutputTokens": 1024,
+            },
+        }
+
+        try:
+            session = await self._get_session()
+            async with session.post(
+                url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as resp:
+                data = await resp.json(content_type=None)
+                if resp.status != 200:
+                    err = data.get("error", {}).get("message") if isinstance(data, dict) else None
+                    return f"AI Error: {err or f'Gemini HTTP {resp.status}'}"
+
+                candidates = data.get("candidates", []) if isinstance(data, dict) else []
+                if not candidates:
+                    return "AI Error: empty Gemini response."
+
+                parts = candidates[0].get("content", {}).get("parts", [])
+                text_chunks = []
+                for part in parts:
+                    if isinstance(part, dict) and part.get("text"):
+                        text_chunks.append(part["text"])
+
+                text = "".join(text_chunks).strip()
+                return text or "AI Error: Gemini returned no text."
+        except asyncio.TimeoutError:
+            return "⏱️ Request timed out. Try again."
+        except Exception as e:
+            print(f"❌ Gemini Error: {e}")
+            return f"AI Error: {str(e)}"
     
     async def generate_openrouter(self, prompt: str, model: str = None) -> str:
         """Generate text using OpenRouter (OpenAI-compatible API)."""
@@ -80,7 +170,10 @@ class AIService:
             }
             payload = {
                 "model": model,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
                 "temperature": 0.7,
                 "max_tokens": 1024,
             }
@@ -123,7 +216,10 @@ class AIService:
     def _run_groq(self, prompt):
         completion = self.groq_client.chat.completions.create(
             model="llama3-8b-8192",
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": prompt},
+            ],
             temperature=0.7,
             max_tokens=1024,
         )
@@ -132,9 +228,11 @@ class AIService:
     async def generate(self, prompt: str) -> str:
         """Generate AI response using active provider."""
         if not self.enabled:
-            return "❌ AI not initialized. Set OPENROUTER_API_KEY (free at openrouter.ai)"
+            return "❌ AI not initialized. Set GEMINI_API_KEY, OPENROUTER_API_KEY, or GROQ_API_KEY."
         
-        if self.provider == "openrouter":
+        if self.provider == "gemini":
+            return await self.generate_gemini(prompt)
+        elif self.provider == "openrouter":
             return await self.generate_openrouter(prompt)
         elif self.provider == "groq":
             return await self.generate_groq(prompt)

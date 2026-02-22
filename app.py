@@ -38,6 +38,7 @@ DNS_MAP = {
     "voice.discord.media": "162.159.135.232",
     "api.telegram.org": "149.154.167.220",
     "api.groq.com": "104.18.2.161",
+    "generativelanguage.googleapis.com": "172.217.21.10",
     "dns.google": "8.8.8.8"
 }
 
@@ -61,6 +62,8 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
 # Configure Groq
 groq_client = None
@@ -71,14 +74,53 @@ if GROQ_API_KEY:
     except Exception as e:
         print(f"⚠️ Failed to initialize Groq: {e}")
 
+if GEMINI_API_KEY:
+    print(f"✅ Gemini Configured ({GEMINI_MODEL})")
+
 # Configure LLM Agent (Ollama - free, local)
 from services.llm_agent_service import LLMAgentService
 llm_agent = LLMAgentService()
 
 async def ai_generate(prompt):
-    """Helper to generate AI content using Groq."""
+    """Helper to generate AI content using Gemini, with Groq fallback."""
+    if GEMINI_API_KEY:
+        try:
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+            )
+            payload = {
+                "systemInstruction": {
+                    "parts": [
+                        {
+                            "text": (
+                                "You are Manga, a helpful and witty Discord bot. "
+                                "Be concise and clear."
+                            )
+                        }
+                    ]
+                },
+                "contents": [
+                    {"role": "user", "parts": [{"text": prompt}]}
+                ],
+                "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1024},
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                    data = await resp.json(content_type=None)
+                    if resp.status == 200 and data.get("candidates"):
+                        parts = data["candidates"][0].get("content", {}).get("parts", [])
+                        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+                        if text:
+                            return text
+                    err = data.get("error", {}).get("message") if isinstance(data, dict) else None
+                    print(f"⚠️ Gemini error ({resp.status}): {err or 'unknown'}")
+        except Exception as e:
+            print(f"⚠️ Gemini generation failed: {e}")
+
     if not groq_client:
-        return "I need my AI brain (Groq) to do that."
+        return "I need my AI brain (Gemini or Groq) to do that."
     try:
         chat_completion = await asyncio.to_thread(
             groq_client.chat.completions.create,
