@@ -28,7 +28,6 @@ import signal
 import random
 import telegram
 import json
-from services.openrouter_config import OPENROUTER_BASE as DEFAULT_OPENROUTER_BASE
 
 # Optional: Google GenAI SDK
 try:
@@ -75,7 +74,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat")
-OPENROUTER_BASE = DEFAULT_OPENROUTER_BASE
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
 # Configure Groq
 groq_client = None

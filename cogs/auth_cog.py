@@ -15,7 +15,6 @@ import shutil
 import sqlite3
 import threading
 from pathlib import Path
-from storage_utils import has_db_files
 
 try:
     import firebase_admin
@@ -1079,8 +1078,12 @@ class AuthCog(commands.Cog, name="Auth"):
             pass
 
     @staticmethod
+    def _has_db_files(db_root: Path) -> bool:
+        return any(db_root.rglob("*.db"))
+
+    @staticmethod
     def _create_backup_snapshot_sync(db_root: Path, backup_root: Path, keep: int):
-        if not db_root.exists() or not has_db_files(db_root):
+        if not db_root.exists() or not AuthCog._has_db_files(db_root):
             return None
 
         backup_root.mkdir(parents=True, exist_ok=True)

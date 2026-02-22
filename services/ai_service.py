@@ -5,8 +5,6 @@ Supports Gemini, OpenRouter (FREE), and Groq.
 import asyncio
 import os
 import aiohttp
-from services.http_session_mixin import HTTPSessionMixin
-from services.openrouter_config import OPENROUTER_BASE
 
 # Optional: Import Google GenAI SDK
 try:
@@ -24,7 +22,7 @@ except ImportError:
     GROQ_AVAILABLE = False
 
 
-class AIService(HTTPSessionMixin):
+class AIService:
     """Handles all AI-related operations using Gemini/OpenRouter/Groq."""
     
     # Free models on OpenRouter (no API credits needed)
@@ -62,7 +60,7 @@ class AIService(HTTPSessionMixin):
         # OpenRouter config
         self.openrouter_key = os.getenv("OPENROUTER_API_KEY")
         self.openrouter_model = os.getenv("OPENROUTER_MODEL", self.FREE_MODELS[0])
-        self.openrouter_base = OPENROUTER_BASE
+        self.openrouter_base = "https://openrouter.ai/api/v1"
         
         # Groq fallback config
         self.groq_client = None
@@ -131,6 +129,12 @@ class AIService(HTTPSessionMixin):
             return
         print("❌ AI Service: No API keys found.")
         print("   Set GEMINI_API_KEY and/or GROQ_API_KEY and/or OPENROUTER_API_KEY")
+
+    async def _get_session(self):
+        """Get or create aiohttp session."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
     
     def _run_gemini(self, prompt: str, model: str) -> str:
         if not self.gemini_client:
@@ -322,4 +326,8 @@ Reply conversationally in 1-2 short sentences. Be friendly and natural."""
             marker = "→ " if m == self.openrouter_model else "  "
             lines.append(f"{marker}`{m}`")
         return "\n".join(lines)
-    
+
+    async def close(self):
+        """Close the aiohttp session."""
+        if self._session and not self._session.closed:
+            await self._session.close()
