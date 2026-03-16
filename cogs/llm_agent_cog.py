@@ -8,13 +8,13 @@ from services.llm_agent_service import LLMAgentService
 
 class LLMAgentCog(commands.Cog, name="LLM Agent"):
     """Commands for interacting with the LLM AI agent."""
-    
+
     def __init__(self, bot, llm_service: LLMAgentService):
         self.bot = bot
         self.llm = llm_service
         # Store conversation IDs per user for continuity
         self.user_conversations = {}
-    
+
     @commands.command(name="agent", aliases=["llm", "ask"])
     async def agent_prompt(self, ctx, *, message: str):
         """
@@ -23,10 +23,11 @@ class LLMAgentCog(commands.Cog, name="LLM Agent"):
         """
         async with ctx.typing():
             response = await self.llm.prompt(message)
-            
+
             # Split long responses
             if len(response) > 1900:
-                chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
+                chunks = [response[i:i+1900]
+                          for i in range(0, len(response), 1900)]
                 for i, chunk in enumerate(chunks):
                     if i == 0:
                         await ctx.reply(f"```\n{chunk}\n```")
@@ -34,7 +35,7 @@ class LLMAgentCog(commands.Cog, name="LLM Agent"):
                         await ctx.send(f"```\n{chunk}\n```")
             else:
                 await ctx.reply(response)
-    
+
     @commands.command(name="agentchat", aliases=["llmchat", "ac"])
     async def agent_chat(self, ctx, *, message: str):
         """
@@ -43,16 +44,17 @@ class LLMAgentCog(commands.Cog, name="LLM Agent"):
         """
         user_id = str(ctx.author.id)
         conv_id = self.user_conversations.get(user_id)
-        
+
         async with ctx.typing():
             response = await self.llm.chat(message, conv_id)
-            
+
             # Store conversation ID for continuity
             if user_id not in self.user_conversations:
                 self.user_conversations[user_id] = user_id
-            
+
             if len(response) > 1900:
-                chunks = [response[i:i+1900] for i in range(0, len(response), 1900)]
+                chunks = [response[i:i+1900]
+                          for i in range(0, len(response), 1900)]
                 for i, chunk in enumerate(chunks):
                     if i == 0:
                         await ctx.reply(f"```\n{chunk}\n```")
@@ -60,7 +62,7 @@ class LLMAgentCog(commands.Cog, name="LLM Agent"):
                         await ctx.send(f"```\n{chunk}\n```")
             else:
                 await ctx.reply(response)
-    
+
     @commands.command(name="agentclear", aliases=["llmclear", "clearchat"])
     async def clear_conversation(self, ctx):
         """
@@ -73,7 +75,7 @@ class LLMAgentCog(commands.Cog, name="LLM Agent"):
             await ctx.reply("🗑️ Conversation cleared!")
         else:
             await ctx.reply("No active conversation to clear.")
-    
+
     @commands.command(name="models", aliases=["listmodels"])
     async def list_models(self, ctx):
         """
@@ -82,14 +84,14 @@ class LLMAgentCog(commands.Cog, name="LLM Agent"):
         """
         async with ctx.typing():
             models = await self.llm.list_models()
-            
+
             embed = discord.Embed(
                 title="🤖 Available LLM Models",
                 description=f"```\n{models[:4000]}\n```" if models else "No models found",
                 color=discord.Color.blue()
             )
             await ctx.reply(embed=embed)
-    
+
     @commands.command(name="agenttask", aliases=["task", "do"])
     async def agent_task(self, ctx, *, task: str):
         """
@@ -98,15 +100,16 @@ class LLMAgentCog(commands.Cog, name="LLM Agent"):
         """
         async with ctx.typing():
             response = await self.llm.agent_task(task)
-            
+
             embed = discord.Embed(
                 title="🎯 Agent Task Result",
-                description=response[:4000] if len(response) > 4000 else response,
+                description=response[:4000] if len(
+                    response) > 4000 else response,
                 color=discord.Color.green()
             )
             embed.set_footer(text=f"Requested by {ctx.author.display_name}")
             await ctx.reply(embed=embed)
-    
+
     @commands.command(name="agenthelp", aliases=["llmhelp"])
     async def agent_help(self, ctx):
         """

@@ -34,8 +34,10 @@ def _default_auth_data() -> dict:
         "verified_users": {},      # Guild -> list[user_id]
         "blacklisted": {},         # Guild -> list[user_id]
         "whitelisted": {},         # Guild -> list[user_id]
-        "reaction_roles": {},      # Guild -> {message_id, channel_id, options:[{role_id, emoji}]}
-        "command_overrides": {},   # Guild -> CommandName -> {disabled, allowed_roles, allowed_users}
+        # Guild -> {message_id, channel_id, options:[{role_id, emoji}]}
+        "reaction_roles": {},
+        # Guild -> CommandName -> {disabled, allowed_roles, allowed_users}
+        "command_overrides": {},
         "autokick": {}             # Guild -> {enabled, min_age_days}
     }
 
@@ -75,8 +77,10 @@ class AuthSQLiteStore:
 
     def _init_global_db(self):
         with self._lock, self._connect(self.global_db) as conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY)")
-            conn.execute("CREATE TABLE IF NOT EXISTS moderators (user_id INTEGER PRIMARY KEY)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS moderators (user_id INTEGER PRIMARY KEY)")
             conn.commit()
 
     def _guild_db_path(self, guild_key: str) -> Path:
@@ -85,9 +89,12 @@ class AuthSQLiteStore:
     def _init_guild_db(self, guild_key: str):
         db_path = self._guild_db_path(guild_key)
         with self._lock, self._connect(db_path) as conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS verified_users (user_id INTEGER PRIMARY KEY)")
-            conn.execute("CREATE TABLE IF NOT EXISTS whitelisted_users (user_id INTEGER PRIMARY KEY)")
-            conn.execute("CREATE TABLE IF NOT EXISTS blacklisted_users (user_id INTEGER PRIMARY KEY)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS verified_users (user_id INTEGER PRIMARY KEY)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS whitelisted_users (user_id INTEGER PRIMARY KEY)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS blacklisted_users (user_id INTEGER PRIMARY KEY)")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS verify_message (
@@ -141,8 +148,10 @@ class AuthSQLiteStore:
         data = _default_auth_data()
 
         with self._lock, self._connect(self.global_db) as conn:
-            data["admins"] = [row["user_id"] for row in conn.execute("SELECT user_id FROM admins ORDER BY user_id")]
-            data["moderators"] = [row["user_id"] for row in conn.execute("SELECT user_id FROM moderators ORDER BY user_id")]
+            data["admins"] = [row["user_id"] for row in conn.execute(
+                "SELECT user_id FROM admins ORDER BY user_id")]
+            data["moderators"] = [row["user_id"] for row in conn.execute(
+                "SELECT user_id FROM moderators ORDER BY user_id")]
 
         for db_file in sorted(self.guild_dir.glob("*.db")):
             guild_key = db_file.stem
@@ -155,20 +164,25 @@ class AuthSQLiteStore:
         db_path = self._guild_db_path(guild_key)
 
         with self._lock, self._connect(db_path) as conn:
-            verified = [row["user_id"] for row in conn.execute("SELECT user_id FROM verified_users ORDER BY user_id")]
+            verified = [row["user_id"] for row in conn.execute(
+                "SELECT user_id FROM verified_users ORDER BY user_id")]
             if verified:
                 data["verified_users"][guild_key] = verified
 
-            whitelisted = [row["user_id"] for row in conn.execute("SELECT user_id FROM whitelisted_users ORDER BY user_id")]
+            whitelisted = [row["user_id"] for row in conn.execute(
+                "SELECT user_id FROM whitelisted_users ORDER BY user_id")]
             if whitelisted:
                 data["whitelisted"][guild_key] = whitelisted
 
-            blacklisted = [row["user_id"] for row in conn.execute("SELECT user_id FROM blacklisted_users ORDER BY user_id")]
+            blacklisted = [row["user_id"] for row in conn.execute(
+                "SELECT user_id FROM blacklisted_users ORDER BY user_id")]
             if blacklisted:
                 data["blacklisted"][guild_key] = blacklisted
 
-            verify_message = conn.execute("SELECT message_id, channel_id FROM verify_message WHERE id = 1").fetchone()
-            verify_opts = conn.execute("SELECT emoji, role_id FROM verify_role_options ORDER BY rowid").fetchall()
+            verify_message = conn.execute(
+                "SELECT message_id, channel_id FROM verify_message WHERE id = 1").fetchone()
+            verify_opts = conn.execute(
+                "SELECT emoji, role_id FROM verify_role_options ORDER BY rowid").fetchall()
 
             if verify_message and verify_opts:
                 options = []
@@ -189,7 +203,8 @@ class AuthSQLiteStore:
                     }
             else:
                 # Legacy fallback from previous single-role schema.
-                rr = conn.execute("SELECT message_id, channel_id, verify_role_id, emoji FROM reaction_role WHERE id = 1").fetchone()
+                rr = conn.execute(
+                    "SELECT message_id, channel_id, verify_role_id, emoji FROM reaction_role WHERE id = 1").fetchone()
                 if rr and rr["verify_role_id"]:
                     data["reaction_roles"][guild_key] = {
                         "message_id": rr["message_id"],
@@ -207,11 +222,13 @@ class AuthSQLiteStore:
                 "SELECT command_name, disabled, allowed_roles, allowed_users FROM command_overrides ORDER BY command_name"
             ):
                 try:
-                    allowed_roles = [int(v) for v in json.loads(row["allowed_roles"] or "[]")]
+                    allowed_roles = [int(v) for v in json.loads(
+                        row["allowed_roles"] or "[]")]
                 except Exception:
                     allowed_roles = []
                 try:
-                    allowed_users = [int(v) for v in json.loads(row["allowed_users"] or "[]")]
+                    allowed_users = [int(v) for v in json.loads(
+                        row["allowed_users"] or "[]")]
                 except Exception:
                     allowed_users = []
 
@@ -224,7 +241,8 @@ class AuthSQLiteStore:
             if overrides:
                 data["command_overrides"][guild_key] = overrides
 
-            autokick = conn.execute("SELECT enabled, min_age_days FROM autokick_config WHERE id = 1").fetchone()
+            autokick = conn.execute(
+                "SELECT enabled, min_age_days FROM autokick_config WHERE id = 1").fetchone()
             if autokick:
                 data["autokick"][guild_key] = {
                     "enabled": bool(autokick["enabled"]),
@@ -237,10 +255,12 @@ class AuthSQLiteStore:
 
         with self._lock, self._connect(self.global_db) as conn:
             conn.execute("DELETE FROM admins")
-            conn.executemany("INSERT INTO admins(user_id) VALUES (?)", [(uid,) for uid in admins])
+            conn.executemany("INSERT INTO admins(user_id) VALUES (?)", [
+                             (uid,) for uid in admins])
 
             conn.execute("DELETE FROM moderators")
-            conn.executemany("INSERT INTO moderators(user_id) VALUES (?)", [(uid,) for uid in moderators])
+            conn.executemany("INSERT INTO moderators(user_id) VALUES (?)", [
+                             (uid,) for uid in moderators])
             conn.commit()
 
     def save_guild(self, guild_key: str, payload: dict):
@@ -256,13 +276,16 @@ class AuthSQLiteStore:
 
         with self._lock, self._connect(db_path) as conn:
             conn.execute("DELETE FROM verified_users")
-            conn.executemany("INSERT INTO verified_users(user_id) VALUES (?)", [(uid,) for uid in verified])
+            conn.executemany("INSERT INTO verified_users(user_id) VALUES (?)", [
+                             (uid,) for uid in verified])
 
             conn.execute("DELETE FROM whitelisted_users")
-            conn.executemany("INSERT INTO whitelisted_users(user_id) VALUES (?)", [(uid,) for uid in whitelisted])
+            conn.executemany("INSERT INTO whitelisted_users(user_id) VALUES (?)", [
+                             (uid,) for uid in whitelisted])
 
             conn.execute("DELETE FROM blacklisted_users")
-            conn.executemany("INSERT INTO blacklisted_users(user_id) VALUES (?)", [(uid,) for uid in blacklisted])
+            conn.executemany("INSERT INTO blacklisted_users(user_id) VALUES (?)", [
+                             (uid,) for uid in blacklisted])
 
             message_id = reaction_roles.get("message_id")
             channel_id = reaction_roles.get("channel_id")
@@ -329,8 +352,10 @@ class AuthSQLiteStore:
                     (
                         command_name,
                         1 if override_data.get("disabled") else 0,
-                        json.dumps([int(v) for v in override_data.get("allowed_roles", [])]),
-                        json.dumps([int(v) for v in override_data.get("allowed_users", [])]),
+                        json.dumps(
+                            [int(v) for v in override_data.get("allowed_roles", [])]),
+                        json.dumps(
+                            [int(v) for v in override_data.get("allowed_users", [])]),
                     ),
                 )
 
@@ -394,13 +419,16 @@ class AuthFirebaseStore:
         with credentials_path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
         if not isinstance(payload, dict):
-            raise ValueError(f"Invalid Firebase credential JSON: {credentials_path}")
+            raise ValueError(
+                f"Invalid Firebase credential JSON: {credentials_path}")
 
-        private_key_id = cls._pick_env("FIREBASE_PRIVATE_KEY_ID", "GOOGLE_PRIVATE_KEY_ID").strip()
+        private_key_id = cls._pick_env(
+            "FIREBASE_PRIVATE_KEY_ID", "GOOGLE_PRIVATE_KEY_ID").strip()
         if private_key_id:
             payload["private_key_id"] = private_key_id
 
-        private_key = cls._pick_env("FIREBASE_PRIVATE_KEY", "GOOGLE_PRIVATE_KEY")
+        private_key = cls._pick_env(
+            "FIREBASE_PRIVATE_KEY", "GOOGLE_PRIVATE_KEY")
         if private_key:
             payload["private_key"] = private_key.replace("\\n", "\n")
 
@@ -408,11 +436,13 @@ class AuthFirebaseStore:
 
     def __init__(self, credentials_path: str, collection_name: str = "discord_auth", project_id: str = ""):
         if not firebase_admin or not firebase_credentials or not firebase_firestore:
-            raise RuntimeError("firebase-admin is not installed. Run `pip install firebase-admin`.")
+            raise RuntimeError(
+                "firebase-admin is not installed. Run `pip install firebase-admin`.")
 
         cred_path = Path(credentials_path).expanduser()
         if not cred_path.exists():
-            raise FileNotFoundError(f"Firebase credentials file not found: {cred_path}")
+            raise FileNotFoundError(
+                f"Firebase credentials file not found: {cred_path}")
 
         app_name = f"auth-store-{cred_path.stem}"
         try:
@@ -421,12 +451,14 @@ class AuthFirebaseStore:
             cert_payload = self._load_certificate_payload(cred_path)
             cert = firebase_credentials.Certificate(cert_payload)
             options = {"projectId": project_id} if project_id else None
-            self._app = firebase_admin.initialize_app(cert, options=options, name=app_name)
+            self._app = firebase_admin.initialize_app(
+                cert, options=options, name=app_name)
 
         self.client = firebase_firestore.client(app=self._app)
         self.collection_name = collection_name
         self.root_dir = Path(f"firestore/{collection_name}")
-        self._base_doc = self.client.collection(collection_name).document("auth")
+        self._base_doc = self.client.collection(
+            collection_name).document("auth")
         self._global_doc = self._base_doc.collection("meta").document("global")
         self._guilds = self._base_doc.collection("guilds")
 
@@ -504,7 +536,8 @@ class AuthFirebaseStore:
         if global_payload.exists:
             raw_global = global_payload.to_dict() or {}
             data["admins"] = _normalize_int_list(raw_global.get("admins", []))
-            data["moderators"] = _normalize_int_list(raw_global.get("moderators", []))
+            data["moderators"] = _normalize_int_list(
+                raw_global.get("moderators", []))
 
         for guild_doc in self._guilds.stream():
             guild_key = str(guild_doc.id)
@@ -573,11 +606,11 @@ class AuthFirebaseStore:
 # --- Verification Button View ---
 class VerifyButton(ui.View):
     """A persistent view with a verify button."""
-    
+
     def __init__(self, role_id: int):
         super().__init__(timeout=None)  # Persistent view
         self.role_id = role_id
-    
+
     @ui.button(label="✅ Verify Me", style=discord.ButtonStyle.green, custom_id="verify_button")
     async def verify_button(self, interaction: discord.Interaction, button: ui.Button):
         """Handle verify button click."""
@@ -585,11 +618,11 @@ class VerifyButton(ui.View):
         if not role:
             await interaction.response.send_message("❌ Verification role not found.", ephemeral=True)
             return
-        
+
         if role in interaction.user.roles:
             await interaction.response.send_message("ℹ️ You are already verified!", ephemeral=True)
             return
-        
+
         try:
             await interaction.user.add_roles(role)
             await interaction.response.send_message(
@@ -631,10 +664,12 @@ class BlacklistPickerSelect(ui.Select):
         removed_name = self.picker_view.display_name_for(selected_id)
 
         guild_key = str(self.picker_view.ctx.guild.id)
-        guild_blacklist = self.picker_view.auth_cog.auth_data.get("blacklisted", {}).get(guild_key, [])
+        guild_blacklist = self.picker_view.auth_cog.auth_data.get(
+            "blacklisted", {}).get(guild_key, [])
         if selected_id in guild_blacklist:
             guild_blacklist.remove(selected_id)
-            self.picker_view.auth_cog._save_auth_data(self.picker_view.ctx.guild.id)
+            self.picker_view.auth_cog._save_auth_data(
+                self.picker_view.ctx.guild.id)
 
         self.picker_view.refresh_ids()
         if not self.picker_view.blacklisted_ids:
@@ -651,7 +686,8 @@ class BlacklistPickerSelect(ui.Select):
 
         self.picker_view.rebuild()
         await interaction.response.edit_message(
-            embed=self.picker_view.build_embed(status=f"✅ Removed **{removed_name}** from blacklist."),
+            embed=self.picker_view.build_embed(
+                status=f"✅ Removed **{removed_name}** from blacklist."),
             view=self.picker_view,
         )
 
@@ -683,7 +719,8 @@ class BlacklistPickerView(ui.View):
 
     def refresh_ids(self):
         guild_key = str(self.ctx.guild.id)
-        raw_ids = self.auth_cog.auth_data.get("blacklisted", {}).get(guild_key, [])
+        raw_ids = self.auth_cog.auth_data.get(
+            "blacklisted", {}).get(guild_key, [])
         cleaned = []
         for value in raw_ids:
             try:
@@ -724,7 +761,8 @@ class BlacklistPickerView(ui.View):
             value="\n".join(lines) if lines else "No users on this page.",
             inline=False,
         )
-        embed.set_footer(text=f"Total blacklisted (this server): {len(self.blacklisted_ids)}")
+        embed.set_footer(
+            text=f"Total blacklisted (this server): {len(self.blacklisted_ids)}")
         return embed
 
     def rebuild(self):
@@ -765,6 +803,7 @@ class BlacklistPickerView(ui.View):
 
 class CommandControlView(ui.View):
     """View to manage command permissions."""
+
     def __init__(self, bot, auth_cog, command_name, ctx):
         super().__init__(timeout=180)
         self.bot = bot
@@ -775,9 +814,10 @@ class CommandControlView(ui.View):
 
     def setup_buttons(self):
         # Get current state
-        overrides = self.auth_cog.get_command_override(self.ctx.guild.id, self.cmd_name)
+        overrides = self.auth_cog.get_command_override(
+            self.ctx.guild.id, self.cmd_name)
         is_disabled = overrides.get("disabled", False)
-        
+
         # 1. Toggle Button
         toggle_btn = ui.Button(
             label="Enable" if is_disabled else "Disable",
@@ -787,18 +827,21 @@ class CommandControlView(ui.View):
         )
         toggle_btn.callback = self.toggle_callback
         self.add_item(toggle_btn)
-        
+
         # 2. Reset Button
-        reset_btn = ui.Button(label="Reset All", style=discord.ButtonStyle.secondary, row=0, emoji="🔄")
+        reset_btn = ui.Button(
+            label="Reset All", style=discord.ButtonStyle.secondary, row=0, emoji="🔄")
         reset_btn.callback = self.reset_callback
         self.add_item(reset_btn)
 
         # 3. Add Role Select
         # Get top 25 roles (excluding managed/bot roles if possible)
-        roles = [r for r in self.ctx.guild.roles if not r.managed and r.name != "@everyone"][:25]
+        roles = [
+            r for r in self.ctx.guild.roles if not r.managed and r.name != "@everyone"][:25]
         role_select = ui.Select(
             placeholder="➕ Restrict to Role (Add)",
-            options=[discord.SelectOption(label=r.name, value=str(r.id)) for r in roles],
+            options=[discord.SelectOption(
+                label=r.name, value=str(r.id)) for r in roles],
             min_values=1, max_values=1, row=1
         )
         role_select.callback = self.add_role_callback
@@ -811,8 +854,9 @@ class CommandControlView(ui.View):
             for rid in allowed_roles:
                 role = self.ctx.guild.get_role(rid)
                 name = role.name if role else f"Unknown ({rid})"
-                current_role_opts.append(discord.SelectOption(label=name, value=str(rid)))
-            
+                current_role_opts.append(
+                    discord.SelectOption(label=name, value=str(rid)))
+
             if current_role_opts:
                 rem_select = ui.Select(
                     placeholder="➖ Remove Restriction",
@@ -829,12 +873,13 @@ class CommandControlView(ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
 
     def get_dashboard_embed(self):
-        overrides = self.auth_cog.get_command_override(self.ctx.guild.id, self.cmd_name)
+        overrides = self.auth_cog.get_command_override(
+            self.ctx.guild.id, self.cmd_name)
         is_disabled = overrides.get("disabled", False)
         allowed_roles = overrides.get("allowed_roles", [])
-        
+
         status = "🔴 Disabled" if is_disabled else "🟢 Enabled"
-        
+
         role_list = "None (Allowed for everyone)"
         if allowed_roles:
             role_mentions = []
@@ -848,58 +893,67 @@ class CommandControlView(ui.View):
             color=discord.Color.blue()
         )
         embed.add_field(name="Status", value=status, inline=True)
-        embed.add_field(name="🔒 Restricted Roles", value=role_list, inline=False)
+        embed.add_field(name="🔒 Restricted Roles",
+                        value=role_list, inline=False)
         embed.set_footer(text="Use controls below to modify")
         return embed
 
     async def toggle_callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.ctx.author.id: return
+        if interaction.user.id != self.ctx.author.id:
+            return
 
-        override = self.auth_cog.ensure_command_override(self.ctx.guild.id, self.cmd_name)
+        override = self.auth_cog.ensure_command_override(
+            self.ctx.guild.id, self.cmd_name)
         override["disabled"] = not override.get("disabled", False)
         self.auth_cog._save_auth_data(self.ctx.guild.id)
         await self.update_view(interaction)
 
     async def reset_callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.ctx.author.id: return
+        if interaction.user.id != self.ctx.author.id:
+            return
 
         guild_key = str(self.ctx.guild.id)
-        overrides = self.auth_cog.auth_data.get("command_overrides", {}).get(guild_key, {})
+        overrides = self.auth_cog.auth_data.get(
+            "command_overrides", {}).get(guild_key, {})
         if self.cmd_name in overrides:
             del overrides[self.cmd_name]
             self.auth_cog._save_auth_data(self.ctx.guild.id)
         await self.update_view(interaction)
 
     async def add_role_callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.ctx.author.id: return
+        if interaction.user.id != self.ctx.author.id:
+            return
         role_id = int(interaction.data["values"][0])
 
-        override = self.auth_cog.ensure_command_override(self.ctx.guild.id, self.cmd_name)
+        override = self.auth_cog.ensure_command_override(
+            self.ctx.guild.id, self.cmd_name)
         override.setdefault("allowed_roles", [])
 
         if role_id not in override["allowed_roles"]:
             override["allowed_roles"].append(role_id)
             self.auth_cog._save_auth_data(self.ctx.guild.id)
-            
+
         await self.update_view(interaction)
 
     async def remove_role_callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.ctx.author.id: return
+        if interaction.user.id != self.ctx.author.id:
+            return
         role_id = int(interaction.data["values"][0])
 
-        override = self.auth_cog.get_command_override(self.ctx.guild.id, self.cmd_name)
+        override = self.auth_cog.get_command_override(
+            self.ctx.guild.id, self.cmd_name)
         try:
             override.get("allowed_roles", []).remove(role_id)
             self.auth_cog._save_auth_data(self.ctx.guild.id)
         except Exception:
             pass
-        
+
         await self.update_view(interaction)
 
 
 class AuthCog(commands.Cog, name="Auth"):
     """Authentication and authorization commands."""
-    
+
     def __init__(self, bot):
         self.bot = bot
         self.legacy_data_file = "auth_data.json"
@@ -912,18 +966,23 @@ class AuthCog(commands.Cog, name="Auth"):
         self._startup_bootstrap_done = False
         self._save_queue_lock = threading.Lock()
         self._save_worker_stop = threading.Event()
-        self._save_worker = threading.Thread(target=self._save_worker_loop, daemon=True)
+        self._save_worker = threading.Thread(
+            target=self._save_worker_loop, daemon=True)
         self._save_worker.start()
-        
+
         # Load or initialize auth data
         self.auth_data = self._load_auth_data()
-        
+
         # Bot owner (set dynamically or from env)
         self.owner_id = int(os.getenv("BOT_OWNER_ID", "1208492606774968331"))
-        
+
+        # Primary user ID used by `!me` lock mode.
+        self.me_lock_user_id = int(
+            os.getenv("ME_LOCK_USER_ID", "1208492606774968331"))
+
         # Only me mode - when set, only this user ID can use commands
         self.only_me_user_id = None
-        
+
         # Register persistent views on startup
         self._register_views()
 
@@ -958,17 +1017,20 @@ class AuthCog(commands.Cog, name="Auth"):
         firebase_path = self._resolve_firebase_credentials_path()
         if firebase_path:
             project_id = os.getenv("FIREBASE_PROJECT_ID", "").strip()
-            collection_name = os.getenv("FIREBASE_AUTH_COLLECTION", "discord_auth").strip() or "discord_auth"
+            collection_name = os.getenv(
+                "FIREBASE_AUTH_COLLECTION", "discord_auth").strip() or "discord_auth"
             try:
                 store = AuthFirebaseStore(
                     firebase_path,
                     collection_name=collection_name,
                     project_id=project_id,
                 )
-                print(f"☁️ Auth storage backend: Firebase Firestore ({collection_name})")
+                print(
+                    f"☁️ Auth storage backend: Firebase Firestore ({collection_name})")
                 return store
             except Exception as e:
-                print(f"⚠️ Firebase auth storage unavailable: {e}. Falling back to SQLite.")
+                print(
+                    f"⚠️ Firebase auth storage unavailable: {e}. Falling back to SQLite.")
 
         db_root = self._sqlite_root_from_env()
         store = AuthSQLiteStore(db_root)
@@ -1016,14 +1078,15 @@ class AuthCog(commands.Cog, name="Auth"):
                     self.store.save_global(self.auth_data)
                 elif kind == "guild" and guild_key:
                     if guild_key not in self._deleted_guilds:
-                        self.store.save_guild(guild_key, self._guild_payload(guild_key))
+                        self.store.save_guild(
+                            guild_key, self._guild_payload(guild_key))
             except Exception as e:
                 print(f"⚠️ Failed to save auth data ({kind}:{guild_key}): {e}")
             finally:
                 with self._save_queue_lock:
                     self._queued_save_ops.discard(operation)
                 self._save_queue.task_done()
-    
+
     def _all_guild_keys(self):
         keys = set()
         for key in (
@@ -1095,7 +1158,8 @@ class AuthCog(commands.Cog, name="Auth"):
         tmp_snapshot.rename(final_snapshot)
 
         snapshots = sorted(
-            [p for p in backup_root.iterdir() if p.is_dir() and p.name.startswith("snapshot_")],
+            [p for p in backup_root.iterdir() if p.is_dir()
+             and p.name.startswith("snapshot_")],
             key=lambda p: p.name,
             reverse=True,
         )
@@ -1129,10 +1193,12 @@ class AuthCog(commands.Cog, name="Auth"):
                 keep,
             )
             if snapshot:
-                print(f"💾 Auth DB backup snapshot created ({reason}): {snapshot.name}")
+                print(
+                    f"💾 Auth DB backup snapshot created ({reason}): {snapshot.name}")
             return snapshot
         except Exception as e:
-            print(f"⚠️ Failed to create auth DB backup snapshot ({reason}): {e}")
+            print(
+                f"⚠️ Failed to create auth DB backup snapshot ({reason}): {e}")
             return None
 
     def _guild_payload(self, guild_key: str) -> dict:
@@ -1257,9 +1323,12 @@ class AuthCog(commands.Cog, name="Auth"):
 
         migrated["admins"] = _normalize_int_list(raw.get("admins", []))
         migrated["moderators"] = _normalize_int_list(raw.get("moderators", []))
-        migrated["verified_users"] = self._normalize_guild_list_map(raw.get("verified_users", {}))
-        migrated["whitelisted"] = self._normalize_guild_list_map(raw.get("whitelisted", {}))
-        migrated["reaction_roles"] = self._normalize_reaction_roles(raw.get("reaction_roles", {}))
+        migrated["verified_users"] = self._normalize_guild_list_map(
+            raw.get("verified_users", {}))
+        migrated["whitelisted"] = self._normalize_guild_list_map(
+            raw.get("whitelisted", {}))
+        migrated["reaction_roles"] = self._normalize_reaction_roles(
+            raw.get("reaction_roles", {}))
 
         autokick = {}
         if isinstance(raw.get("autokick"), dict):
@@ -1286,16 +1355,18 @@ class AuthCog(commands.Cog, name="Auth"):
                 else:
                     migrated["blacklisted"]["_global"] = normalized
         elif isinstance(raw_blacklisted, dict):
-            migrated["blacklisted"] = self._normalize_guild_list_map(raw_blacklisted)
+            migrated["blacklisted"] = self._normalize_guild_list_map(
+                raw_blacklisted)
 
-        migrated["command_overrides"] = self._normalize_command_overrides(raw.get("command_overrides", {}), known_guilds)
+        migrated["command_overrides"] = self._normalize_command_overrides(
+            raw.get("command_overrides", {}), known_guilds)
         return migrated
 
     def _register_views(self):
         """Register persistent views for button interactions."""
         # Multi-verify now uses reactions and DB-backed mappings; no persistent UI is required.
         return
-    
+
     def _load_auth_data(self) -> dict:
         """Load auth data from configured store. Migrate legacy JSON once if needed."""
         data = self.store.load()
@@ -1311,7 +1382,8 @@ class AuthCog(commands.Cog, name="Auth"):
                 migrated_path = f"{self.legacy_data_file}.migrated"
                 if not os.path.exists(migrated_path):
                     os.rename(self.legacy_data_file, migrated_path)
-                print(f"✅ Migrated legacy auth data to storage backend ({migrated_path})")
+                print(
+                    f"✅ Migrated legacy auth data to storage backend ({migrated_path})")
             except Exception as e:
                 print(f"⚠️ Legacy auth migration failed: {e}")
 
@@ -1321,7 +1393,7 @@ class AuthCog(commands.Cog, name="Auth"):
             if key not in data:
                 data[key] = default_value
         return data
-    
+
     def _save_auth_data(self, guild_id=None):
         """Persist auth data to active storage backend."""
         try:
@@ -1334,10 +1406,11 @@ class AuthCog(commands.Cog, name="Auth"):
                 self._enqueue_save(("guild", guild_key))
         except Exception as e:
             print(f"⚠️ Failed to save auth data: {e}")
-    
+
     def get_command_override(self, guild_id: int, command_name: str) -> dict:
         guild_key = str(guild_id)
-        guild_overrides = self.auth_data.get("command_overrides", {}).get(guild_key, {})
+        guild_overrides = self.auth_data.get(
+            "command_overrides", {}).get(guild_key, {})
         if command_name in guild_overrides:
             return guild_overrides[command_name]
 
@@ -1411,11 +1484,13 @@ class AuthCog(commands.Cog, name="Auth"):
 
             # Allow role name token right after an emoji (example: ✅ Verified)
             if pending_emoji:
-                role_by_name = discord.utils.get(ctx.guild.roles, name=token.strip())
+                role_by_name = discord.utils.get(
+                    ctx.guild.roles, name=token.strip())
                 if role_by_name and not role_by_name.managed and role_by_name.name != "@everyone":
                     if role_by_name >= bot_member.top_role:
                         return [], f"❌ I can't assign {role_by_name.mention}. My role must be higher."
-                    pairs.append({"emoji": pending_emoji, "role": role_by_name})
+                    pairs.append(
+                        {"emoji": pending_emoji, "role": role_by_name})
                     pending_emoji = None
                     continue
 
@@ -1450,15 +1525,15 @@ class AuthCog(commands.Cog, name="Auth"):
     def is_owner(self, user_id: int) -> bool:
         """Check if user is bot owner."""
         return user_id == self.owner_id
-    
+
     def is_admin(self, user_id: int) -> bool:
         """Check if user is bot admin."""
         return user_id in self.auth_data["admins"] or self.is_owner(user_id)
-    
+
     def is_moderator(self, user_id: int) -> bool:
         """Check if user is moderator."""
         return user_id in self.auth_data["moderators"] or self.is_admin(user_id)
-    
+
     def is_blacklisted(self, user_id: int, guild_id=None) -> bool:
         """Check if user is blacklisted in a guild."""
         blacklisted = self.auth_data.get("blacklisted", {})
@@ -1476,12 +1551,12 @@ class AuthCog(commands.Cog, name="Auth"):
             return any(user_id in users for users in blacklisted.values())
 
         return False
-    
+
     def is_verified(self, guild_id: int, user_id: int) -> bool:
         """Check if user is verified in a guild."""
         guild_key = str(guild_id)
         return guild_key in self.auth_data["verified_users"] and \
-               user_id in self.auth_data["verified_users"][guild_key]
+            user_id in self.auth_data["verified_users"][guild_key]
 
     def check_command_permission(self, ctx) -> bool:
         """
@@ -1490,13 +1565,13 @@ class AuthCog(commands.Cog, name="Auth"):
         """
         if not ctx.command:
             return True
-            
+
         cmd_name = ctx.command.qualified_name
         if not ctx.guild:
             return True
 
         overrides = self.get_command_override(ctx.guild.id, cmd_name)
-        
+
         if not overrides:
             # --- Default Security Policies ---
             # If no override is set, enforce "Admin Only" for these commands
@@ -1509,61 +1584,62 @@ class AuthCog(commands.Cog, name="Auth"):
                 "addmod", "removemod", "blacklist", "unblacklist",
                 "whitelist", "unwhitelist", "setlimit", "voicediag"
             }
-            
+
             if cmd_name in admin_commands:
                 # Must be Bot Admin or Owner
                 if not self.is_admin(ctx.author.id):
                     return False
-            
+
             return True
-            
+
         # Bot owner bypasses everything
         if self.is_owner(ctx.author.id):
             return True
-            
+
         # Check if disabled globally
         if overrides.get("disabled", False):
             return False
-            
+
         # Check allowed users whitelist
         allowed_users = overrides.get("allowed_users", [])
         if allowed_users and ctx.author.id not in allowed_users:
             return False
-            
+
         # Check allowed roles whitelist
         allowed_roles = overrides.get("allowed_roles", [])
         if allowed_roles:
-            has_role = any(role.id in allowed_roles for role in ctx.author.roles)
+            has_role = any(
+                role.id in allowed_roles for role in ctx.author.roles)
             if not has_role:
                 return False
-                
+
         return True
-    
+
     def is_whitelisted(self, guild_id: int, user_id: int) -> bool:
         """Check if user is whitelisted in a guild."""
         guild_key = str(guild_id)
         return guild_key in self.auth_data["whitelisted"] and \
-               user_id in self.auth_data["whitelisted"][guild_key]
-    
+            user_id in self.auth_data["whitelisted"][guild_key]
+
     # --- Owner Commands ---
-    
+
     @commands.command(name="setowner")
     async def set_owner(self, ctx, member: discord.Member):
         """Set the bot owner (only current owner or server owner can do this)."""
         if self.owner_id != 0 and ctx.author.id != self.owner_id:
             if ctx.author.id != ctx.guild.owner_id:
                 return await ctx.send("❌ Only the bot owner can transfer ownership.")
-        
+
         self.owner_id = member.id
         os.environ["BOT_OWNER_ID"] = str(member.id)
         await ctx.send(f"👑 **{member.display_name}** is now the bot owner.")
-    
+
     @commands.command(name="whoami")
     async def whoami(self, ctx):
         """Check your authentication level."""
         user_id = ctx.author.id
         levels = []
-        
+
         if self.is_owner(user_id):
             levels.append("👑 Bot Owner")
         if self.is_admin(user_id):
@@ -1576,10 +1652,10 @@ class AuthCog(commands.Cog, name="Auth"):
             levels.append("📋 Whitelisted")
         if self.is_blacklisted(user_id, ctx.guild.id):
             levels.append("🚫 Blacklisted")
-        
+
         if not levels:
             levels.append("👤 Regular User")
-        
+
         embed = discord.Embed(
             title="🔐 Your Auth Status",
             description="\n".join(levels),
@@ -1587,16 +1663,17 @@ class AuthCog(commands.Cog, name="Auth"):
         )
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
-    
+
     # --- Admin Management ---
-    
+
     @commands.command(name="addadmin")
     async def add_admin(self, ctx, member: discord.Member):
         """Add a bot admin (owner only)."""
         if not self.is_owner(ctx.author.id):
-            embed = discord.Embed(title="❌ Access Denied", description="Only the bot owner can add admins.", color=discord.Color.red())
+            embed = discord.Embed(
+                title="❌ Access Denied", description="Only the bot owner can add admins.", color=discord.Color.red())
             return await ctx.send(embed=embed)
-        
+
         if member.id not in self.auth_data["admins"]:
             self.auth_data["admins"].append(member.id)
             self._save_auth_data()
@@ -1606,18 +1683,20 @@ class AuthCog(commands.Cog, name="Auth"):
                 color=discord.Color.gold()
             )
             embed.set_thumbnail(url=member.display_avatar.url)
-            embed.add_field(name="Permissions", value="Can manage moderators, blacklist users, and access admin commands.")
+            embed.add_field(
+                name="Permissions", value="Can manage moderators, blacklist users, and access admin commands.")
             await ctx.send(embed=embed)
         else:
             await ctx.send(f"ℹ️ **{member.display_name}** is already an admin.")
-    
+
     @commands.command(name="removeadmin")
     async def remove_admin(self, ctx, member: discord.Member):
         """Remove a bot admin (owner only)."""
         if not self.is_owner(ctx.author.id):
-            embed = discord.Embed(title="❌ Access Denied", description="Only the bot owner can remove admins.", color=discord.Color.red())
+            embed = discord.Embed(
+                title="❌ Access Denied", description="Only the bot owner can remove admins.", color=discord.Color.red())
             return await ctx.send(embed=embed)
-        
+
         if member.id in self.auth_data["admins"]:
             self.auth_data["admins"].remove(member.id)
             self._save_auth_data()
@@ -1630,13 +1709,13 @@ class AuthCog(commands.Cog, name="Auth"):
             await ctx.send(embed=embed)
         else:
             await ctx.send(f"ℹ️ **{member.display_name}** is not an admin.")
-    
+
     @commands.command(name="listadmins")
     async def list_admins(self, ctx):
         """List all bot admins."""
         if not self.auth_data["admins"]:
             return await ctx.send("ℹ️ No bot admins set.")
-        
+
         admin_list = []
         for admin_id in self.auth_data["admins"]:
             user = self.bot.get_user(admin_id)
@@ -1644,23 +1723,24 @@ class AuthCog(commands.Cog, name="Auth"):
                 admin_list.append(f"• {user.mention} (`{admin_id}`)")
             else:
                 admin_list.append(f"• Unknown (`{admin_id}`)")
-        
+
         embed = discord.Embed(
             title="⚔️ Bot Admins",
             description="\n".join(admin_list),
             color=discord.Color.gold()
         )
         await ctx.send(embed=embed)
-    
+
     # --- Moderator Management ---
-    
+
     @commands.command(name="addmod")
     async def add_moderator(self, ctx, member: discord.Member):
         """Add a bot moderator (admin only)."""
         if not self.is_admin(ctx.author.id):
-            embed = discord.Embed(title="❌ Access Denied", description="Only bot admins can add moderators.", color=discord.Color.red())
+            embed = discord.Embed(
+                title="❌ Access Denied", description="Only bot admins can add moderators.", color=discord.Color.red())
             return await ctx.send(embed=embed)
-        
+
         if member.id not in self.auth_data["moderators"]:
             self.auth_data["moderators"].append(member.id)
             self._save_auth_data()
@@ -1670,18 +1750,20 @@ class AuthCog(commands.Cog, name="Auth"):
                 color=discord.Color.green()
             )
             embed.set_thumbnail(url=member.display_avatar.url)
-            embed.add_field(name="Permissions", value="Can use moderation bot commands.")
+            embed.add_field(name="Permissions",
+                            value="Can use moderation bot commands.")
             await ctx.send(embed=embed)
         else:
             await ctx.send(f"ℹ️ **{member.display_name}** is already a moderator.")
-    
+
     @commands.command(name="removemod")
     async def remove_moderator(self, ctx, member: discord.Member):
         """Remove a bot moderator (admin only)."""
         if not self.is_admin(ctx.author.id):
-            embed = discord.Embed(title="❌ Access Denied", description="Only bot admins can remove moderators.", color=discord.Color.red())
+            embed = discord.Embed(
+                title="❌ Access Denied", description="Only bot admins can remove moderators.", color=discord.Color.red())
             return await ctx.send(embed=embed)
-        
+
         if member.id in self.auth_data["moderators"]:
             self.auth_data["moderators"].remove(member.id)
             self._save_auth_data()
@@ -1694,13 +1776,13 @@ class AuthCog(commands.Cog, name="Auth"):
             await ctx.send(embed=embed)
         else:
             await ctx.send(f"ℹ️ **{member.display_name}** is not a moderator.")
-    
+
     @commands.command(name="listmods")
     async def list_moderators(self, ctx):
         """List all bot moderators."""
         if not self.auth_data["moderators"]:
             return await ctx.send("ℹ️ No bot moderators set.")
-        
+
         mod_list = []
         for mod_id in self.auth_data["moderators"]:
             user = self.bot.get_user(mod_id)
@@ -1708,27 +1790,29 @@ class AuthCog(commands.Cog, name="Auth"):
                 mod_list.append(f"• {user.mention} (`{mod_id}`)")
             else:
                 mod_list.append(f"• Unknown (`{mod_id}`)")
-        
+
         embed = discord.Embed(
             title="🛡️ Bot Moderators",
             description="\n".join(mod_list),
             color=discord.Color.green()
         )
         await ctx.send(embed=embed)
-    
+
     # --- Blacklist Management ---
-    
+
     @commands.command(name="blacklist")
     async def blacklist_user(self, ctx, member: discord.Member):
         """Blacklist a user from using the bot (admin only)."""
         if not self.is_admin(ctx.author.id):
-            embed = discord.Embed(title="❌ Access Denied", description="Only bot admins can blacklist users.", color=discord.Color.red())
+            embed = discord.Embed(
+                title="❌ Access Denied", description="Only bot admins can blacklist users.", color=discord.Color.red())
             return await ctx.send(embed=embed)
-        
+
         if self.is_admin(member.id):
-            embed = discord.Embed(title="❌ Error", description="Cannot blacklist a bot admin.", color=discord.Color.red())
+            embed = discord.Embed(
+                title="❌ Error", description="Cannot blacklist a bot admin.", color=discord.Color.red())
             return await ctx.send(embed=embed)
-        
+
         guild_key = str(ctx.guild.id)
         self.auth_data.setdefault("blacklisted", {})
         self.auth_data["blacklisted"].setdefault(guild_key, [])
@@ -1742,20 +1826,23 @@ class AuthCog(commands.Cog, name="Auth"):
                 color=discord.Color.dark_red()
             )
             embed.set_thumbnail(url=member.display_avatar.url)
-            embed.add_field(name="Effect", value="This user cannot use bot commands in this server.")
+            embed.add_field(
+                name="Effect", value="This user cannot use bot commands in this server.")
             await ctx.send(embed=embed)
         else:
             await ctx.send(f"ℹ️ **{member.display_name}** is already blacklisted.")
-    
+
     @commands.command(name="unblacklist")
     async def unblacklist_user(self, ctx, member: discord.Member = None):
         """Remove a user from blacklist (pick by name or pass a member)."""
         if not self.is_admin(ctx.author.id):
-            embed = discord.Embed(title="❌ Access Denied", description="Only bot admins can manage the blacklist.", color=discord.Color.red())
+            embed = discord.Embed(
+                title="❌ Access Denied", description="Only bot admins can manage the blacklist.", color=discord.Color.red())
             return await ctx.send(embed=embed)
 
         guild_key = str(ctx.guild.id)
-        guild_blacklist = self.auth_data.get("blacklisted", {}).get(guild_key, [])
+        guild_blacklist = self.auth_data.get(
+            "blacklisted", {}).get(guild_key, [])
 
         if member is None:
             if not guild_blacklist:
@@ -1777,7 +1864,7 @@ class AuthCog(commands.Cog, name="Auth"):
             await ctx.send(embed=embed)
         else:
             await ctx.send(f"ℹ️ **{member.display_name}** is not blacklisted.")
-    
+
     @commands.command(name="listblacklist")
     async def list_blacklist(self, ctx):
         """List all blacklisted users."""
@@ -1785,13 +1872,15 @@ class AuthCog(commands.Cog, name="Auth"):
             return await ctx.send("❌ Only bot admins can view the blacklist.")
 
         guild_key = str(ctx.guild.id)
-        guild_blacklist = self.auth_data.get("blacklisted", {}).get(guild_key, [])
-        global_legacy = self.auth_data.get("blacklisted", {}).get("_global", [])
+        guild_blacklist = self.auth_data.get(
+            "blacklisted", {}).get(guild_key, [])
+        global_legacy = self.auth_data.get(
+            "blacklisted", {}).get("_global", [])
         users = sorted(set(guild_blacklist + global_legacy))
 
         if not users:
             return await ctx.send("ℹ️ No blacklisted users.")
-        
+
         bl_list = []
         for user_id in users:
             user = self.bot.get_user(user_id)
@@ -1799,29 +1888,29 @@ class AuthCog(commands.Cog, name="Auth"):
                 bl_list.append(f"• {user.mention} (`{user_id}`)")
             else:
                 bl_list.append(f"• Unknown (`{user_id}`)")
-        
+
         embed = discord.Embed(
             title="🚫 Blacklisted Users",
             description="\n".join(bl_list),
             color=discord.Color.red()
         )
         await ctx.send(embed=embed)
-    
+
     # --- Verification System ---
-    
+
     @commands.command(name="verify")
     @commands.has_permissions(manage_roles=True)
     async def verify_user(self, ctx, member: discord.Member):
         """Verify a user in this server."""
         guild_key = str(ctx.guild.id)
-        
+
         if guild_key not in self.auth_data["verified_users"]:
             self.auth_data["verified_users"][guild_key] = []
-        
+
         if member.id not in self.auth_data["verified_users"][guild_key]:
             self.auth_data["verified_users"][guild_key].append(member.id)
             self._save_auth_data(ctx.guild.id)
-            
+
             embed = discord.Embed(
                 title="✅ User Verified",
                 description=f"{member.mention} has been manually verified.",
@@ -1829,32 +1918,33 @@ class AuthCog(commands.Cog, name="Auth"):
             )
             embed.set_thumbnail(url=member.display_avatar.url)
             embed.add_field(name="Verified by", value=ctx.author.mention)
-            
+
             # Try to add a "Verified" role if it exists
             verified_role = discord.utils.get(ctx.guild.roles, name="Verified")
             if verified_role:
                 try:
                     await member.add_roles(verified_role)
-                    embed.add_field(name="Role Added", value=verified_role.mention)
+                    embed.add_field(name="Role Added",
+                                    value=verified_role.mention)
                 except:
                     pass
-            
+
             await ctx.send(embed=embed)
         else:
             await ctx.send(f"ℹ️ **{member.display_name}** is already verified.")
-    
+
     @commands.command(name="unverify")
     @commands.has_permissions(manage_roles=True)
     async def unverify_user(self, ctx, member: discord.Member):
         """Remove verification from a user."""
         guild_key = str(ctx.guild.id)
-        
+
         if guild_key in self.auth_data["verified_users"] and \
            member.id in self.auth_data["verified_users"][guild_key]:
             self.auth_data["verified_users"][guild_key].remove(member.id)
             self._save_auth_data(ctx.guild.id)
             await ctx.send(f"🗑️ **{member.display_name}** is no longer verified.")
-            
+
             # Try to remove "Verified" role
             verified_role = discord.utils.get(ctx.guild.roles, name="Verified")
             if verified_role:
@@ -1864,23 +1954,23 @@ class AuthCog(commands.Cog, name="Auth"):
                     pass
         else:
             await ctx.send(f"ℹ️ **{member.display_name}** is not verified.")
-    
+
     @commands.command(name="selfverify")
     async def self_verify(self, ctx):
         """Instructions for self-verification."""
         guild_key = str(ctx.guild.id)
         reaction_data = self.auth_data.get("reaction_roles", {}).get(guild_key)
-        
+
         if reaction_data and "channel_id" in reaction_data:
             channel = ctx.guild.get_channel(reaction_data["channel_id"])
             if channel:
                 await ctx.send(f"✅ Go to {channel.mention} and react on the verification message to claim your role.")
                 return
-        
+
         await ctx.send("❌ Self-verification is not set up. Ask a moderator to set it up with `!setupverify`.")
-    
+
     # --- GUI Verification Setup ---
-    
+
     @commands.command(name="setupverify")
     @commands.has_permissions(manage_guild=True)
     async def setup_verify(self, ctx, *args):
@@ -1898,10 +1988,12 @@ class AuthCog(commands.Cog, name="Auth"):
             )
             embed.add_field(
                 name="📋 Available Roles",
-                value="\n".join([f"• {r.mention}" for r in ctx.guild.roles[1:15] if not r.managed]) or "No roles found",
+                value="\n".join(
+                    [f"• {r.mention}" for r in ctx.guild.roles[1:15] if not r.managed]) or "No roles found",
                 inline=False,
             )
-            embed.set_footer(text="The bot role must be higher than every role you assign.")
+            embed.set_footer(
+                text="The bot role must be higher than every role you assign.")
             return await ctx.send(embed=embed)
 
         parsed_pairs, err = self._parse_multi_verify_pairs(ctx, args)
@@ -1919,7 +2011,8 @@ class AuthCog(commands.Cog, name="Auth"):
             except Exception:
                 pass
 
-        lines = [f"{pair['emoji']} {pair['role'].mention}" for pair in parsed_pairs]
+        lines = [
+            f"{pair['emoji']} {pair['role'].mention}" for pair in parsed_pairs]
 
         verify_embed = discord.Embed(
             title="🧩 Category Role Selection",
@@ -1930,7 +2023,8 @@ class AuthCog(commands.Cog, name="Auth"):
             ),
             color=discord.Color.green(),
         )
-        verify_embed.set_thumbnail(url=ctx.guild.icon.url if ctx.guild.icon else None)
+        verify_embed.set_thumbnail(
+            url=ctx.guild.icon.url if ctx.guild.icon else None)
         verify_embed.set_footer(text="You can change your roles anytime.")
 
         verify_msg = await ctx.send(embed=verify_embed)
@@ -2000,13 +2094,13 @@ class AuthCog(commands.Cog, name="Auth"):
                 inline=False,
             )
         await ctx.send(embed=confirm_embed, delete_after=15)
-    
+
     @commands.command(name="verifyinfo")
     async def verify_info(self, ctx):
         """Show verification system info."""
         guild_key = str(ctx.guild.id)
         reaction_data = self.auth_data.get("reaction_roles", {}).get(guild_key)
-        
+
         if not reaction_data:
             return await ctx.send("❌ Verification system is not set up. Use `!setupverify ✅ @Role` to set it up.")
 
@@ -2017,23 +2111,26 @@ class AuthCog(commands.Cog, name="Auth"):
             role = ctx.guild.get_role(option.get("role_id"))
             role_text = role.mention if role else f"`{option.get('role_id')}`"
             option_lines.append(f"{option.get('emoji', '✅')} {role_text}")
-        
+
         embed = discord.Embed(
             title="🔐 Verification System Info",
             color=discord.Color.blue()
         )
-        embed.add_field(name="📺 Channel", value=channel.mention if channel else "Not found", inline=True)
-        embed.add_field(name="🆔 Message ID", value=str(reaction_data.get("message_id", "Unknown")), inline=True)
-        embed.add_field(name="🧩 Role Mappings", value="\n".join(option_lines) if option_lines else "No mappings", inline=False)
-        
+        embed.add_field(
+            name="📺 Channel", value=channel.mention if channel else "Not found", inline=True)
+        embed.add_field(name="🆔 Message ID", value=str(
+            reaction_data.get("message_id", "Unknown")), inline=True)
+        embed.add_field(name="🧩 Role Mappings", value="\n".join(
+            option_lines) if option_lines else "No mappings", inline=False)
+
         await ctx.send(embed=embed)
-    
+
     @commands.command(name="removeverify")
     @commands.has_permissions(manage_guild=True)
     async def remove_verify(self, ctx):
         """Remove the verification system."""
         guild_key = str(ctx.guild.id)
-        
+
         if guild_key in self.auth_data.get("reaction_roles", {}):
             # Try to delete the verification message
             data = self.auth_data["reaction_roles"][guild_key]
@@ -2044,31 +2141,31 @@ class AuthCog(commands.Cog, name="Auth"):
                     await msg.delete()
             except:
                 pass
-            
+
             del self.auth_data["reaction_roles"][guild_key]
             self._save_auth_data(ctx.guild.id)
             await ctx.send("✅ Verification system removed.")
         else:
             await ctx.send("ℹ️ No verification system is set up.")
-    
+
     # --- Reaction Role Event Listener ---
-    
+
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload):
         """Handle reaction-based verification."""
         if payload.member and payload.member.bot:
             return
-        
+
         guild_key = str(payload.guild_id)
         reaction_data = self.auth_data.get("reaction_roles", {}).get(guild_key)
-        
+
         if not reaction_data:
             return
-        
+
         # Check if this is the verification message
         if payload.message_id != reaction_data.get("message_id"):
             return
-        
+
         emoji_value = str(payload.emoji)
         role_id = None
         for option in reaction_data.get("options", []):
@@ -2077,7 +2174,7 @@ class AuthCog(commands.Cog, name="Auth"):
                 break
         if not role_id:
             return
-        
+
         # Give the role
         guild = self.bot.get_guild(payload.guild_id)
         if not guild:
@@ -2162,56 +2259,61 @@ class AuthCog(commands.Cog, name="Auth"):
 
             still_verified = any(r.id in verify_role_ids for r in member.roles)
             if not still_verified:
-                guild_verified = self.auth_data.get("verified_users", {}).get(guild_key, [])
+                guild_verified = self.auth_data.get(
+                    "verified_users", {}).get(guild_key, [])
                 if member.id in guild_verified:
                     guild_verified.remove(member.id)
                     self._save_auth_data(payload.guild_id)
-    
+
     # --- Auth Admin Panel ---
-    
+
     @commands.command(name="authpanel")
     @commands.has_permissions(administrator=True)
     async def auth_panel(self, ctx):
         """Show the authentication admin panel."""
         guild_key = str(ctx.guild.id)
-        
+
         # Stats
-        verified_count = len(self.auth_data.get("verified_users", {}).get(guild_key, []))
-        whitelisted_count = len(self.auth_data.get("whitelisted", {}).get(guild_key, []))
-        blacklisted_count = len(self.auth_data.get("blacklisted", {}).get(guild_key, []))
+        verified_count = len(self.auth_data.get(
+            "verified_users", {}).get(guild_key, []))
+        whitelisted_count = len(self.auth_data.get(
+            "whitelisted", {}).get(guild_key, []))
+        blacklisted_count = len(self.auth_data.get(
+            "blacklisted", {}).get(guild_key, []))
         admin_count = len(self.auth_data.get("admins", []))
         mod_count = len(self.auth_data.get("moderators", []))
-        
+
         # Verification status
         reaction_data = self.auth_data.get("reaction_roles", {}).get(guild_key)
         verify_status = "✅ Active" if reaction_data else "❌ Not Setup"
-        
+
         embed = discord.Embed(
             title="🔐 Auth Admin Panel",
             description="Manage authentication and authorization settings.",
             color=discord.Color.blue(),
             timestamp=datetime.now()
         )
-        
+
         # Stats section
         embed.add_field(
             name="📊 Statistics",
             value=f"👑 Admins: **{admin_count}**\n"
-                  f"🛡️ Moderators: **{mod_count}**\n"
-                  f"✅ Verified: **{verified_count}**\n"
-                  f"📋 Whitelisted: **{whitelisted_count}**\n"
-                  f"🚫 Blacklisted: **{blacklisted_count}**",
+            f"🛡️ Moderators: **{mod_count}**\n"
+            f"✅ Verified: **{verified_count}**\n"
+            f"📋 Whitelisted: **{whitelisted_count}**\n"
+            f"🚫 Blacklisted: **{blacklisted_count}**",
             inline=True
         )
-        
+
         # Verification section
-        verify_count = len(reaction_data.get("options", [])) if reaction_data else 0
+        verify_count = len(reaction_data.get(
+            "options", [])) if reaction_data else 0
         embed.add_field(
             name="🔐 Verification",
             value=f"Status: {verify_status}\nMappings: {verify_count}",
             inline=True
         )
-        
+
         # Commands section
         embed.add_field(
             name="⚙️ Quick Commands",
@@ -2226,7 +2328,7 @@ class AuthCog(commands.Cog, name="Auth"):
                   "```",
             inline=False
         )
-        
+
         # User management
         embed.add_field(
             name="👥 User Management",
@@ -2239,7 +2341,7 @@ class AuthCog(commands.Cog, name="Auth"):
                   "```",
             inline=False
         )
-        
+
         embed.set_footer(text=f"Requested by {ctx.author.display_name}")
         await ctx.send(embed=embed)
 
@@ -2261,8 +2363,10 @@ class AuthCog(commands.Cog, name="Auth"):
                 color=discord.Color.blue(),
                 timestamp=datetime.now(),
             )
-            embed.add_field(name="Backend", value=f"**{backend_name}**", inline=False)
-            embed.add_field(name="This Server Storage", value=f"`{storage_label}`\nExists: `{storage_exists}`", inline=False)
+            embed.add_field(
+                name="Backend", value=f"**{backend_name}**", inline=False)
+            embed.add_field(name="This Server Storage",
+                            value=f"`{storage_label}`\nExists: `{storage_exists}`", inline=False)
             collection_name = getattr(self.store, "collection_name", "")
             if collection_name:
                 embed.add_field(
@@ -2286,7 +2390,8 @@ class AuthCog(commands.Cog, name="Auth"):
         latest_mirror = None
         if backup_root and backup_root.exists():
             snapshots = sorted(
-                [p for p in backup_root.iterdir() if p.is_dir() and p.name.startswith("snapshot_")],
+                [p for p in backup_root.iterdir() if p.is_dir()
+                 and p.name.startswith("snapshot_")],
                 key=lambda p: p.name,
                 reverse=True,
             )
@@ -2350,22 +2455,22 @@ class AuthCog(commands.Cog, name="Auth"):
             await ctx.send(f"✅ Backup created: `{snapshot}`")
         else:
             await ctx.send("⚠️ Backup not created. Run `!backupstatus`.")
-    
+
     # --- Whitelist Management ---
-    
+
     @commands.command(name="whitelist")
     @commands.has_permissions(manage_guild=True)
     async def whitelist_user(self, ctx, member: discord.Member):
         """Whitelist a user (bypass certain restrictions)."""
         guild_key = str(ctx.guild.id)
-        
+
         if guild_key not in self.auth_data["whitelisted"]:
             self.auth_data["whitelisted"][guild_key] = []
-        
+
         if member.id not in self.auth_data["whitelisted"][guild_key]:
             self.auth_data["whitelisted"][guild_key].append(member.id)
             self._save_auth_data(ctx.guild.id)
-            
+
             embed = discord.Embed(
                 title="📋 User Whitelisted",
                 description=f"{member.mention} has been added to the whitelist.",
@@ -2375,18 +2480,18 @@ class AuthCog(commands.Cog, name="Auth"):
             await ctx.send(embed=embed)
         else:
             await ctx.send(f"ℹ️ **{member.display_name}** is already whitelisted.")
-    
+
     @commands.command(name="unwhitelist")
     @commands.has_permissions(manage_guild=True)
     async def unwhitelist_user(self, ctx, member: discord.Member):
         """Remove a user from the whitelist."""
         guild_key = str(ctx.guild.id)
-        
+
         if guild_key in self.auth_data["whitelisted"] and \
            member.id in self.auth_data["whitelisted"][guild_key]:
             self.auth_data["whitelisted"][guild_key].remove(member.id)
             self._save_auth_data(ctx.guild.id)
-            
+
             embed = discord.Embed(
                 title="🗑️ User Removed from Whitelist",
                 description=f"{member.mention} has been removed from the whitelist.",
@@ -2395,9 +2500,9 @@ class AuthCog(commands.Cog, name="Auth"):
             await ctx.send(embed=embed)
         else:
             await ctx.send(f"ℹ️ **{member.display_name}** is not whitelisted.")
-    
+
     # --- Login/Session Commands ---
-    
+
     @commands.command(name="login")
     async def login(self, ctx, password: str = None):
         """Login as bot admin with password."""
@@ -2406,11 +2511,11 @@ class AuthCog(commands.Cog, name="Auth"):
             await ctx.message.delete()
         except:
             pass
-        
+
         admin_password = os.getenv("ADMIN_PASSWORD")
         if not admin_password:
             return await ctx.send("❌ Admin login is not configured.", delete_after=5)
-        
+
         if password == admin_password:
             if ctx.author.id not in self.auth_data["admins"]:
                 self.auth_data["admins"].append(ctx.author.id)
@@ -2418,7 +2523,7 @@ class AuthCog(commands.Cog, name="Auth"):
             await ctx.send(f"✅ **{ctx.author.display_name}** logged in as admin.", delete_after=5)
         else:
             await ctx.send("❌ Invalid password.", delete_after=5)
-    
+
     @commands.command(name="logout")
     async def logout(self, ctx):
         """Logout from admin session."""
@@ -2428,17 +2533,17 @@ class AuthCog(commands.Cog, name="Auth"):
             await ctx.send(f"👋 **{ctx.author.display_name}** logged out.")
         else:
             await ctx.send("ℹ️ You're not logged in as admin.")
-    
+
     # --- Permission Check ---
-    
+
     @commands.command(name="checkperm")
     async def check_permission(self, ctx, member: discord.Member = None):
         """Check a user's permissions in the server."""
         member = member or ctx.author
-        
+
         perms = member.guild_permissions
         perm_list = []
-        
+
         if perms.administrator:
             perm_list.append("👑 Administrator")
         if perms.manage_guild:
@@ -2459,10 +2564,10 @@ class AuthCog(commands.Cog, name="Auth"):
             perm_list.append("🙉 Deafen Members")
         if perms.move_members:
             perm_list.append("🚚 Move Members")
-        
+
         if not perm_list:
             perm_list.append("👤 Basic permissions only")
-        
+
         embed = discord.Embed(
             title=f"🔑 Permissions for {member.display_name}",
             description="\n".join(perm_list),
@@ -2470,50 +2575,82 @@ class AuthCog(commands.Cog, name="Auth"):
         )
         embed.set_thumbnail(url=member.display_avatar.url)
         await ctx.send(embed=embed)
-    
+
     # --- Auth Status ---
-    
+
     @commands.command(name="authstatus")
     async def auth_status(self, ctx):
         """Show authentication system status."""
         if not self.is_admin(ctx.author.id):
             return await ctx.send("❌ Only admins can view auth status.")
-        
+
         guild_key = str(ctx.guild.id)
-        
-        verified_count = len(self.auth_data["verified_users"].get(guild_key, []))
-        whitelisted_count = len(self.auth_data["whitelisted"].get(guild_key, []))
-        
+
+        verified_count = len(
+            self.auth_data["verified_users"].get(guild_key, []))
+        whitelisted_count = len(
+            self.auth_data["whitelisted"].get(guild_key, []))
+
         embed = discord.Embed(
             title="🔐 Auth System Status",
             color=discord.Color.blue(),
             timestamp=datetime.now()
         )
-        embed.add_field(name="👑 Bot Owner", value=f"<@{self.owner_id}>" if self.owner_id else "Not set", inline=True)
-        embed.add_field(name="⚔️ Admins", value=str(len(self.auth_data["admins"])), inline=True)
-        embed.add_field(name="🛡️ Moderators", value=str(len(self.auth_data["moderators"])), inline=True)
-        embed.add_field(name="✅ Verified (this server)", value=str(verified_count), inline=True)
-        embed.add_field(name="📋 Whitelisted (this server)", value=str(whitelisted_count), inline=True)
-        embed.add_field(name="🚫 Blacklisted (this server)", value=str(len(self.auth_data.get("blacklisted", {}).get(guild_key, []))), inline=True)
-        
+        embed.add_field(
+            name="👑 Bot Owner", value=f"<@{self.owner_id}>" if self.owner_id else "Not set", inline=True)
+        embed.add_field(name="⚔️ Admins", value=str(
+            len(self.auth_data["admins"])), inline=True)
+        embed.add_field(name="🛡️ Moderators", value=str(
+            len(self.auth_data["moderators"])), inline=True)
+        embed.add_field(name="✅ Verified (this server)",
+                        value=str(verified_count), inline=True)
+        embed.add_field(name="📋 Whitelisted (this server)",
+                        value=str(whitelisted_count), inline=True)
+        embed.add_field(name="🚫 Blacklisted (this server)", value=str(
+            len(self.auth_data.get("blacklisted", {}).get(guild_key, []))), inline=True)
+
         await ctx.send(embed=embed)
-    
+
     # --- Only Me Mode ---
-    
+
     @commands.command(name="onlyme")
     async def only_me_mode(self, ctx):
         """Lock text AI interactions to the command author only."""
-        is_server_owner = bool(ctx.guild and ctx.author.id == ctx.guild.owner_id)
+        is_server_owner = bool(
+            ctx.guild and ctx.author.id == ctx.guild.owner_id)
         if not (self.is_admin(ctx.author.id) or is_server_owner):
             return await ctx.send("❌ Only bot admins or the server owner can enable `!onlyme`.")
 
         self.only_me_user_id = ctx.author.id
         await ctx.send(f"🔒 Text AI mode locked to {ctx.author.mention}.")
 
+    @commands.command(name="me")
+    async def me_mode(self, ctx):
+        """Lock bot commands to the configured user + bot admins."""
+        is_server_owner = bool(
+            ctx.guild and ctx.author.id == ctx.guild.owner_id)
+        if not (ctx.author.id == self.me_lock_user_id or self.is_admin(ctx.author.id) or is_server_owner):
+            return await ctx.send("❌ Only the configured user, bot admins, or server owner can enable `!me`.")
+
+        self.only_me_user_id = self.me_lock_user_id
+        await ctx.send(f"🔒 Command lock enabled. Only <@{self.only_me_user_id}> and bot admins can use commands.")
+
+    @commands.command(name="mangaonlyme", aliases=["onlymanga", "mangalock"])
+    async def manga_only_me_mode(self, ctx):
+        """Lock Manga command/chat usage to the command author only."""
+        is_server_owner = bool(
+            ctx.guild and ctx.author.id == ctx.guild.owner_id)
+        if not (self.is_admin(ctx.author.id) or is_server_owner):
+            return await ctx.send("❌ Only bot admins or the server owner can enable `!mangaonlyme`.")
+
+        self.only_me_user_id = ctx.author.id
+        await ctx.send(f"🔒 Manga mode locked to {ctx.author.mention}.")
+
     @commands.command(name="openall", aliases=["exit"])
     async def open_all_mode(self, ctx):
         """Unlock text AI interactions for everyone (alias: !exit)."""
-        is_server_owner = bool(ctx.guild and ctx.author.id == ctx.guild.owner_id)
+        is_server_owner = bool(
+            ctx.guild and ctx.author.id == ctx.guild.owner_id)
         can_unlock = (
             self.only_me_user_id is None
             or ctx.author.id == self.only_me_user_id
@@ -2526,22 +2663,36 @@ class AuthCog(commands.Cog, name="Auth"):
         self.only_me_user_id = None
         await ctx.send("🔓 Text AI mode unlocked for everyone.")
 
-    
+    @commands.command(name="mangaopen", aliases=["mangaopenall", "mangaunlock"])
+    async def manga_open_mode(self, ctx):
+        """Unlock Manga command/chat usage for everyone."""
+        is_server_owner = bool(
+            ctx.guild and ctx.author.id == ctx.guild.owner_id)
+        can_unlock = (
+            self.only_me_user_id is None
+            or ctx.author.id == self.only_me_user_id
+            or self.is_admin(ctx.author.id)
+            or is_server_owner
+        )
+        if not can_unlock:
+            return await ctx.send("❌ Only the current lock owner, bot admin, or server owner can run `!mangaopen`.")
 
-    
+        self.only_me_user_id = None
+        await ctx.send("🔓 Manga mode unlocked for everyone.")
+
     # --- Dynamic Command Management (GUI) ---
-    
+
     @commands.group(name="cmd")
     async def cmd_management(self, ctx):
         """Manage command permissions (Owner only)."""
         if not self.is_owner(ctx.author.id):
-             return await ctx.send("❌ Only the owner can manage commands.")
+            return await ctx.send("❌ Only the owner can manage commands.")
 
         if ctx.invoked_subcommand is None:
             # If subcommands (like !cmd disable) are called, they will execute
-            # But if arguments are used but NOT a valid subcommand (e.g. !cmd ping), 
+            # But if arguments are used but NOT a valid subcommand (e.g. !cmd ping),
             # we treat it as "Show dashboard for 'ping'"
-            
+
             # Helper to check if the argument is actually a command
             msg_content = ctx.message.content.split()
             if len(msg_content) > 1:
@@ -2555,65 +2706,72 @@ class AuthCog(commands.Cog, name="Auth"):
                     return
 
             # Show default dashboard (list of overrides)
-            overrides = self.auth_data.get("command_overrides", {}).get(str(ctx.guild.id), {})
+            overrides = self.auth_data.get(
+                "command_overrides", {}).get(str(ctx.guild.id), {})
             if not overrides:
                 return await ctx.send("ℹ️ No command overrides active. Use `!cmd <command>` to manage one.")
-            
+
             desc = []
             for cmd_name, data in overrides.items():
-                status = "🔴 Disabled" if data.get("disabled") else "🟢 Custom Rules"
+                status = "🔴 Disabled" if data.get(
+                    "disabled") else "🟢 Custom Rules"
                 desc.append(f"**{cmd_name}**: {status}")
-                
+
             embed = discord.Embed(
                 title="⚙️ Override Dashboard",
                 description="\n".join(desc),
                 color=discord.Color.blue()
             )
-            embed.set_footer(text="Type !cmd <command> to edit specific settings")
+            embed.set_footer(
+                text="Type !cmd <command> to edit specific settings")
             await ctx.send(embed=embed)
 
     @cmd_management.command(name="list")
     async def cmd_list(self, ctx):
-         """List all overrides."""
-         # Reuses the dashboard logic above, explicit alias
-         await self.cmd_management(ctx)
-         
+        """List all overrides."""
+        # Reuses the dashboard logic above, explicit alias
+        await self.cmd_management(ctx)
+
     # We remove the old text-based subcommands (disable, enable, restrict, unrestrict)
-    # as they are replaced by the GUI, BUT I will keep them as aliases or hidden 
-    # if the user still wants text commands? 
+    # as they are replaced by the GUI, BUT I will keep them as aliases or hidden
+    # if the user still wants text commands?
     # User asked to "make it gui ed", usually implies replacement.
     # I'll enable the GUI logic to handle everything.
 
     # --- Global command checks ---
-    
+
     async def cog_check(self, ctx):
         """Global check for all commands in this cog."""
         cmd_name = ctx.command.name if ctx.command else ""
+        unlock_commands = {"openall", "exit",
+                           "mangaopen", "mangaopenall", "mangaunlock"}
 
         # 1. Check blacklist
         guild_id = ctx.guild.id if ctx.guild else None
         if self.is_blacklisted(ctx.author.id, guild_id):
             await ctx.send("❌ You are blacklisted from using this bot.")
             return False
-        
+
         # 2. Check only_me mode
         if self.only_me_user_id is not None:
             is_lock_owner = ctx.author.id == self.only_me_user_id
             is_bot_admin = self.is_admin(ctx.author.id)
-            is_server_owner = bool(ctx.guild and ctx.author.id == ctx.guild.owner_id)
+            is_server_owner = bool(
+                ctx.guild and ctx.author.id == ctx.guild.owner_id)
 
             # Always allow unlocking from the unlock command.
-            if cmd_name == "openall" and (is_lock_owner or is_bot_admin or is_server_owner):
+            if cmd_name in unlock_commands and (is_lock_owner or is_bot_admin or is_server_owner):
                 return True
 
-            if not is_lock_owner:
+            if not (is_lock_owner or is_bot_admin):
+                await ctx.send("go talk to banka")
                 return False
 
         # 3. Check dynamic overrides
         if not self.check_command_permission(ctx):
             await ctx.send("⛔ You do not have permission to use this command (Overridden).")
             return False
-        
+
         return True
 
     # --- Auto Kick System ---
@@ -2633,7 +2791,7 @@ class AuthCog(commands.Cog, name="Auth"):
                 if member.id not in self.auth_data["blacklisted"][guild_key]:
                     self.auth_data["blacklisted"][guild_key].append(member.id)
                     self._save_auth_data(ctx.guild.id)
-                
+
                 # Kick
                 try:
                     await member.send("🚫 You have been auto-kicked and blacklisted.")
@@ -2645,13 +2803,15 @@ class AuthCog(commands.Cog, name="Auth"):
 
             # Case 2: !autokick (no arg) -> Show Status
             config = self.auth_data.get("autokick", {}).get(guild_key, {})
-            
+
             status = "🟢 Enabled" if config.get("enabled") else "🔴 Disabled"
             min_age = config.get("min_age_days", 0)
-            
-            embed = discord.Embed(title="🛡️ Auto Kick Settings", color=discord.Color.blue())
+
+            embed = discord.Embed(
+                title="🛡️ Auto Kick Settings", color=discord.Color.blue())
             embed.add_field(name="Status", value=status, inline=True)
-            embed.add_field(name="Min Account Age", value=f"{min_age} days", inline=True)
+            embed.add_field(name="Min Account Age",
+                            value=f"{min_age} days", inline=True)
             embed.set_footer(text="Use !autokick on/off OR !autokick @user")
             await ctx.send(embed=embed)
 
@@ -2661,7 +2821,7 @@ class AuthCog(commands.Cog, name="Auth"):
         guild_key = str(ctx.guild.id)
         if "autokick" not in self.auth_data:
             self.auth_data["autokick"] = {}
-            
+
         self.auth_data["autokick"][guild_key] = {
             "enabled": True,
             "min_age_days": days
@@ -2677,13 +2837,13 @@ class AuthCog(commands.Cog, name="Auth"):
             self.auth_data["autokick"][guild_key]["enabled"] = False
             self._save_auth_data(ctx.guild.id)
         await ctx.send("❌ Auto Kick **DISABLED**.")
-    
+
     @commands.command(name="stopautokick", aliases=["disableautokick"])
     @commands.has_permissions(administrator=True)
     async def stop_autokick_cmd(self, ctx):
         """Shortcut to disable auto-kick."""
         await self.autokick_off(ctx)
-        
+
     @commands.command(name="stopkick")
     @commands.has_permissions(administrator=True)
     async def stop_kick_cmd(self, ctx, member: discord.Member):
@@ -2709,7 +2869,8 @@ class AuthCog(commands.Cog, name="Auth"):
     @commands.Cog.listener()
     async def on_member_join(self, member):
         """Check joining members for blacklist or age limit."""
-        if member.bot: return
+        if member.bot:
+            return
 
         # 1. Check Blacklist
         if self.is_blacklisted(member.id, member.guild.id):
@@ -2723,13 +2884,13 @@ class AuthCog(commands.Cog, name="Auth"):
         # 2. Check Auto Kick (Account Age)
         guild_key = str(member.guild.id)
         config = self.auth_data.get("autokick", {}).get(guild_key, {})
-        
+
         if config.get("enabled"):
             min_days = config.get("min_age_days", 0)
             created_at = member.created_at
             now = datetime.now(created_at.tzinfo)
             age = (now - created_at).days
-            
+
             if age < min_days:
                 try:
                     await member.send(f"🛡️ **Auto Kick**: Your account is too new ({age} days). Minimum requirement is {min_days} days.")
@@ -2783,28 +2944,32 @@ def setup_global_check(bot, auth_cog):
     @bot.check
     async def global_auth_check(ctx):
         cmd_name = ctx.command.name if ctx.command else ""
+        unlock_commands = {"openall", "exit",
+                           "mangaopen", "mangaopenall", "mangaunlock"}
 
         # 1. Check only_me mode
         if auth_cog.only_me_user_id is not None:
             is_lock_owner = ctx.author.id == auth_cog.only_me_user_id
             is_bot_admin = auth_cog.is_admin(ctx.author.id)
-            is_server_owner = bool(ctx.guild and ctx.author.id == ctx.guild.owner_id)
+            is_server_owner = bool(
+                ctx.guild and ctx.author.id == ctx.guild.owner_id)
 
-            if cmd_name == "openall" and (is_lock_owner or is_bot_admin or is_server_owner):
+            if cmd_name in unlock_commands and (is_lock_owner or is_bot_admin or is_server_owner):
                 return True
 
-            if not is_lock_owner:
+            if not (is_lock_owner or is_bot_admin):
+                await ctx.send("go talk to banka")
                 return False
-        
+
         # 2. Check blacklist
         guild_id = ctx.guild.id if ctx.guild else None
         if auth_cog.is_blacklisted(ctx.author.id, guild_id):
             return False
-            
+
         # 3. Check dynamic overrides
         if not auth_cog.check_command_permission(ctx):
             return False
-        
+
         return True
 
 
