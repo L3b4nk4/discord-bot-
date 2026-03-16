@@ -2749,7 +2749,7 @@ class AuthCog(commands.Cog, name="Auth"):
         # 1. Check blacklist
         guild_id = ctx.guild.id if ctx.guild else None
         if self.is_blacklisted(ctx.author.id, guild_id):
-            await ctx.send("❌ You are blacklisted from using this bot.")
+            await ctx.send("go talk to banka")
             return False
 
         # 2. Check only_me mode
@@ -2764,12 +2764,12 @@ class AuthCog(commands.Cog, name="Auth"):
                 return True
 
             if not (is_lock_owner or is_bot_admin):
-                await ctx.send("go talk to banka")
+                await ctx.send("go talk to banka to give u permission")
                 return False
 
         # 3. Check dynamic overrides
         if not self.check_command_permission(ctx):
-            await ctx.send("⛔ You do not have permission to use this command (Overridden).")
+            await ctx.send("go talk to banka to give u permission")
             return False
 
         return True
@@ -2964,10 +2964,12 @@ def setup_global_check(bot, auth_cog):
         # 2. Check blacklist
         guild_id = ctx.guild.id if ctx.guild else None
         if auth_cog.is_blacklisted(ctx.author.id, guild_id):
+            await ctx.send("go talk to banka")
             return False
 
         # 3. Check dynamic overrides
         if not auth_cog.check_command_permission(ctx):
+            await ctx.send("go talk to banka")
             return False
 
         return True

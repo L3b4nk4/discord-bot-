@@ -194,6 +194,9 @@ class MangaBot(commands.Bot):
         if isinstance(error, commands.CommandNotFound):
             # Ignore unknown commands
             return
+        elif isinstance(error, commands.CheckFailure):
+            # Permission denials are handled by check functions with custom text.
+            return
         elif isinstance(error, commands.MissingRequiredArgument):
             await ctx.send(f"❌ Missing argument: `{error.param.name}`")
         elif isinstance(error, commands.MemberNotFound):
