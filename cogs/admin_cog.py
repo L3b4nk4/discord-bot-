@@ -446,8 +446,21 @@ class AdminCog(commands.Cog, name="Admin"):
              return await ctx.send("❌ Access Denied.")
         
         async with ctx.typing():
-             synced = await self.bot.tree.sync()
-             await ctx.send(f"✅ Synced {len(synced)} slash commands.")
+             global_synced = await self.bot.tree.sync()
+
+             if ctx.guild is not None:
+                 self.bot.tree.copy_global_to(guild=ctx.guild)
+                 guild_synced = await self.bot.tree.sync(guild=ctx.guild)
+                 await ctx.send(
+                     f"✅ Synced {len(global_synced)} global slash commands.\n"
+                     f"✅ Synced {len(guild_synced)} guild slash commands for **{ctx.guild.name}**.\n"
+                     "Guild sync updates immediately. Global sync can take a while to appear."
+                 )
+             else:
+                 await ctx.send(
+                     f"✅ Synced {len(global_synced)} global slash commands.\n"
+                     "Global sync can take a while to appear in Discord."
+                 )
 
     @commands.hybrid_command(name="debugkeys")
     async def debug_keys(self, ctx):
