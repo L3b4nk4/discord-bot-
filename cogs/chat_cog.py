@@ -82,6 +82,7 @@ class ChatCog(commands.Cog, name="Chat"):
 `!iq [user]` - Random IQ
 `!pp [user]` - PP length
 `!howgay [user]` - Gay calculator
+`!hown [user]` - Random HowN meter
 `!rate <thing>` - Rate something
 `!choice <a> <b>` - Random choice
 `!8ball <question>` - Magic 8-ball

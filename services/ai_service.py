@@ -38,9 +38,16 @@ class AIService:
         self.provider = "none"
         self._session = None
         self.system_prompt = (
-            "You are Manga, a Discord bot assistant. "
-            "Be accurate, concise, and action-oriented."
+            "You are Manga, a Discord bot assistant inside a Discord server.\n"
+            "Be accurate, concise, practical, and natural.\n"
+            "Never invent commands, permissions, moderation actions, or results.\n"
+            "If you are unsure, say so briefly instead of guessing.\n"
+            "If a request is ambiguous, ask one short clarifying question.\n"
+            "Prefer direct answers and short actionable wording."
         )
+        self.temperature = min(
+            1.2, max(0.0, float(os.getenv("AI_TEMPERATURE", "0.45"))))
+        self.max_tokens = max(256, int(os.getenv("AI_MAX_TOKENS", "900")))
 
         # Optional provider selector (auto|gemini|openrouter|groq)
         self.preferred_provider = os.getenv("AI_PROVIDER", "auto").strip().lower()
@@ -228,8 +235,8 @@ class AIService:
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": prompt},
                 ],
-                "temperature": 0.7,
-                "max_tokens": 1024,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
             }
             
             async with session.post(
@@ -279,10 +286,69 @@ class AIService:
                 {"role": "system", "content": self.system_prompt},
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.7,
-            max_tokens=1024,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
         )
         return completion.choices[0].message.content
+
+    @staticmethod
+    def _clean_user_text(text: str) -> str:
+        return (text or "").strip()
+
+    def _format_history(self, history) -> str:
+        if not history:
+            return ""
+
+        lines = []
+        for item in history[-10:]:
+            if not isinstance(item, dict):
+                continue
+
+            role = str(item.get("role", "user")).strip().lower()
+            content = self._clean_user_text(item.get("content", ""))
+            if not content:
+                continue
+
+            name = self._clean_user_text(item.get("name", ""))
+            if role == "assistant":
+                speaker = "Manga"
+            else:
+                speaker = name or "User"
+
+            lines.append(f"{speaker}: {content}")
+
+        return "\n".join(lines)
+
+    def _build_chat_prompt(self, username: str, message: str, history=None) -> str:
+        parts = [
+            "Mode: Discord text chat.",
+            "Rules:",
+            "- Reply in 1-3 short sentences unless a short list is clearly better.",
+            "- Be helpful and natural, not robotic.",
+            "- Do not pretend you already changed server state.",
+            "- If the user asks for bot help and you do not know the exact command, say so briefly.",
+        ]
+
+        history_block = self._format_history(history)
+        if history_block:
+            parts.append("Conversation context so far (oldest to newest):")
+            parts.append(history_block)
+            parts.append("Continue the same conversation naturally. Do not restart from the beginning.")
+
+        parts.append(f"User: {username}")
+        parts.append(f"Message: {self._clean_user_text(message)}")
+        return "\n".join(parts)
+
+    def _build_voice_prompt(self, username: str, speech: str) -> str:
+        return (
+            "Mode: Discord voice chat.\n"
+            "Rules:\n"
+            "- Reply conversationally in 1-2 short sentences.\n"
+            "- Keep phrasing easy to speak aloud.\n"
+            "- Do not invent actions or claim you already did something unless it truly happened.\n"
+            f"User: {username}\n"
+            f"Speech: {self._clean_user_text(speech)}"
+        )
 
     async def _generate_with_fallback(self, prompt: str) -> str:
         """Generate AI response using active provider and fallback order."""
@@ -326,18 +392,14 @@ class AIService:
             print(f"⚠️ AI Service total timeout reached after {self.total_timeout}s")
             return "⏱️ I'm taking too long right now. Please try again."
     
-    async def chat_response(self, username: str, message: str) -> str:
+    async def chat_response(self, username: str, message: str, history=None) -> str:
         """Generate a chat response."""
-        prompt = f"""You are Manga, a friendly Discord bot assistant.
-User '{username}' says: "{message}"
-Reply helpfully and concisely (1-2 sentences)."""
+        prompt = self._build_chat_prompt(username, message, history=history)
         return await self.generate(prompt)
     
     async def voice_response(self, username: str, speech: str) -> str:
         """Generate a voice response."""
-        prompt = f"""You are Manga, a voice assistant in a Discord voice chat.
-User '{username}' said: "{speech}"
-Reply conversationally in 1-2 short sentences. Be friendly and natural."""
+        prompt = self._build_voice_prompt(username, speech)
         return await self.generate(prompt)
     
     async def list_free_models(self) -> str:

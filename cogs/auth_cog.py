@@ -30,6 +30,7 @@ def _default_auth_data() -> dict:
     """Default in-memory auth model."""
     return {
         "admins": [],              # Bot admins (global)
+        "trusted_users": [],       # Allowed during !me / !onlyme lock (global)
         "moderators": [],          # Bot moderators (global)
         "verified_users": {},      # Guild -> list[user_id]
         "blacklisted": {},         # Guild -> list[user_id]
@@ -79,6 +80,8 @@ class AuthSQLiteStore:
         with self._lock, self._connect(self.global_db) as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS trusted_users (user_id INTEGER PRIMARY KEY)")
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS moderators (user_id INTEGER PRIMARY KEY)")
             conn.commit()
@@ -150,6 +153,8 @@ class AuthSQLiteStore:
         with self._lock, self._connect(self.global_db) as conn:
             data["admins"] = [row["user_id"] for row in conn.execute(
                 "SELECT user_id FROM admins ORDER BY user_id")]
+            data["trusted_users"] = [row["user_id"] for row in conn.execute(
+                "SELECT user_id FROM trusted_users ORDER BY user_id")]
             data["moderators"] = [row["user_id"] for row in conn.execute(
                 "SELECT user_id FROM moderators ORDER BY user_id")]
 
@@ -251,12 +256,17 @@ class AuthSQLiteStore:
 
     def save_global(self, data: dict):
         admins = sorted({int(v) for v in data.get("admins", [])})
+        trusted_users = sorted({int(v) for v in data.get("trusted_users", [])})
         moderators = sorted({int(v) for v in data.get("moderators", [])})
 
         with self._lock, self._connect(self.global_db) as conn:
             conn.execute("DELETE FROM admins")
             conn.executemany("INSERT INTO admins(user_id) VALUES (?)", [
                              (uid,) for uid in admins])
+
+            conn.execute("DELETE FROM trusted_users")
+            conn.executemany("INSERT INTO trusted_users(user_id) VALUES (?)", [
+                             (uid,) for uid in trusted_users])
 
             conn.execute("DELETE FROM moderators")
             conn.executemany("INSERT INTO moderators(user_id) VALUES (?)", [
@@ -536,6 +546,8 @@ class AuthFirebaseStore:
         if global_payload.exists:
             raw_global = global_payload.to_dict() or {}
             data["admins"] = _normalize_int_list(raw_global.get("admins", []))
+            data["trusted_users"] = _normalize_int_list(
+                raw_global.get("trusted_users", []))
             data["moderators"] = _normalize_int_list(
                 raw_global.get("moderators", []))
 
@@ -561,6 +573,7 @@ class AuthFirebaseStore:
     def save_global(self, data: dict):
         payload = {
             "admins": _normalize_int_list(data.get("admins", [])),
+            "trusted_users": _normalize_int_list(data.get("trusted_users", [])),
             "moderators": _normalize_int_list(data.get("moderators", [])),
         }
         self._global_doc.set(payload)
@@ -951,6 +964,238 @@ class CommandControlView(ui.View):
         await self.update_view(interaction)
 
 
+class TrustedUserAddSelect(ui.UserSelect):
+    """User picker for adding trusted users."""
+
+    def __init__(self, manager_view):
+        self.manager_view = manager_view
+        super().__init__(
+            placeholder="➕ Select a user to trust",
+            min_values=1,
+            max_values=1,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        selected = self.values[0] if self.values else None
+        if not selected:
+            await interaction.response.send_message("❌ No user selected.", ephemeral=True)
+            return
+
+        if getattr(selected, "bot", False):
+            await interaction.response.send_message("❌ Bots cannot be added as trusted users.", ephemeral=True)
+            return
+
+        if self.manager_view.auth_cog.is_admin(selected.id):
+            await interaction.response.send_message(
+                f"ℹ️ {selected.mention} is already a bot admin, so they do not need trusted-user access.",
+                ephemeral=True,
+            )
+            return
+
+        trusted_users = self.manager_view.auth_cog.auth_data.setdefault(
+            "trusted_users", [])
+        if selected.id in trusted_users:
+            status = f"ℹ️ **{selected.display_name}** is already in the trusted-user list."
+        else:
+            trusted_users.append(selected.id)
+            self.manager_view.auth_cog._save_auth_data()
+            status = f"✅ Added **{selected.display_name}** to trusted users."
+
+        self.manager_view.refresh_ids()
+        self.manager_view.rebuild()
+        await interaction.response.edit_message(
+            embed=self.manager_view.build_embed(status=status),
+            view=self.manager_view,
+        )
+
+
+class TrustedUserRemoveSelect(ui.Select):
+    """Dropdown for removing trusted users."""
+
+    def __init__(self, manager_view, user_ids):
+        self.manager_view = manager_view
+        options = []
+        for user_id in user_ids:
+            name = manager_view.display_name_for(user_id)
+            options.append(
+                discord.SelectOption(
+                    label=name[:100],
+                    description=f"ID: {user_id}",
+                    value=str(user_id),
+                )
+            )
+
+        super().__init__(
+            placeholder=f"➖ Remove trusted user ({manager_view.page + 1}/{manager_view.total_pages})",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        selected_id = int(self.values[0])
+        removed_name = self.manager_view.display_name_for(selected_id)
+
+        trusted_users = self.manager_view.auth_cog.auth_data.setdefault(
+            "trusted_users", [])
+        if selected_id in trusted_users:
+            trusted_users.remove(selected_id)
+            self.manager_view.auth_cog._save_auth_data()
+
+        self.manager_view.refresh_ids()
+        self.manager_view.page = min(
+            self.manager_view.page, self.manager_view.total_pages - 1)
+        self.manager_view.rebuild()
+        await interaction.response.edit_message(
+            embed=self.manager_view.build_embed(
+                status=f"✅ Removed **{removed_name}** from trusted users."),
+            view=self.manager_view,
+        )
+
+
+class TrustedUserManagerView(ui.View):
+    """Interactive view for managing trusted users."""
+    PAGE_SIZE = 25
+
+    def __init__(self, auth_cog, ctx, timeout=180):
+        super().__init__(timeout=timeout)
+        self.auth_cog = auth_cog
+        self.ctx = ctx
+        self.page = 0
+        self.trusted_ids = []
+        self.refresh_ids()
+        self.rebuild()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.ctx.author.id:
+            await interaction.response.send_message(
+                "❌ This manager is only for the command author.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @property
+    def total_pages(self):
+        if not self.trusted_ids:
+            return 1
+        return (len(self.trusted_ids) - 1) // self.PAGE_SIZE + 1
+
+    def refresh_ids(self):
+        raw_ids = self.auth_cog.auth_data.get("trusted_users", [])
+        cleaned = []
+        for value in raw_ids:
+            try:
+                cleaned.append(int(value))
+            except Exception:
+                continue
+        self.trusted_ids = sorted(set(cleaned))
+
+    def display_name_for(self, user_id: int) -> str:
+        member = self.ctx.guild.get_member(user_id) if self.ctx.guild else None
+        if member:
+            return member.display_name
+
+        user = self.auth_cog.bot.get_user(user_id)
+        if user:
+            return user.name
+
+        return f"Unknown ({user_id})"
+
+    def current_page_ids(self):
+        start = self.page * self.PAGE_SIZE
+        end = start + self.PAGE_SIZE
+        return self.trusted_ids[start:end]
+
+    def build_embed(self, status: str = None) -> discord.Embed:
+        embed = discord.Embed(
+            title="✨ Trusted User Manager",
+            description=status or "Add or remove users who may bypass `!me` / `!onlyme` lock mode.",
+            color=discord.Color.blue(),
+        )
+
+        lines = []
+        for user_id in self.current_page_ids():
+            lines.append(f"`{user_id}` - {self.display_name_for(user_id)[:28]}")
+
+        embed.add_field(
+            name=f"Trusted Users (Page {self.page + 1}/{self.total_pages})",
+            value="\n".join(lines) if lines else "No trusted users configured.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Access",
+            value="Trusted users are not admins. They only bypass `!me` and `!onlyme`.",
+            inline=False,
+        )
+        embed.set_footer(text=f"Total trusted users: {len(self.trusted_ids)}")
+        return embed
+
+    def rebuild(self):
+        self.clear_items()
+        self.add_item(TrustedUserAddSelect(self))
+
+        page_ids = self.current_page_ids()
+        if page_ids:
+            self.add_item(TrustedUserRemoveSelect(self, page_ids))
+
+        refresh_btn = ui.Button(
+            label="Refresh",
+            style=discord.ButtonStyle.secondary,
+            emoji="🔄",
+            row=2,
+        )
+
+        async def refresh_callback(interaction: discord.Interaction):
+            self.refresh_ids()
+            self.page = min(self.page, self.total_pages - 1)
+            self.rebuild()
+            await interaction.response.edit_message(
+                embed=self.build_embed(),
+                view=self,
+            )
+
+        refresh_btn.callback = refresh_callback
+        self.add_item(refresh_btn)
+
+        if self.total_pages > 1:
+            prev_btn = ui.Button(
+                label="⬅️ Prev",
+                style=discord.ButtonStyle.secondary,
+                row=2,
+                disabled=self.page == 0,
+            )
+            next_btn = ui.Button(
+                label="Next ➡️",
+                style=discord.ButtonStyle.secondary,
+                row=2,
+                disabled=self.page >= self.total_pages - 1,
+            )
+
+            async def prev_callback(interaction: discord.Interaction):
+                self.page = max(0, self.page - 1)
+                self.rebuild()
+                await interaction.response.edit_message(
+                    embed=self.build_embed(),
+                    view=self,
+                )
+
+            async def next_callback(interaction: discord.Interaction):
+                self.page = min(self.total_pages - 1, self.page + 1)
+                self.rebuild()
+                await interaction.response.edit_message(
+                    embed=self.build_embed(),
+                    view=self,
+                )
+
+            prev_btn.callback = prev_callback
+            next_btn.callback = next_callback
+            self.add_item(prev_btn)
+            self.add_item(next_btn)
+
+
 class AuthCog(commands.Cog, name="Auth"):
     """Authentication and authorization commands."""
 
@@ -1212,7 +1457,7 @@ class AuthCog(commands.Cog, name="Auth"):
         }
 
     def _is_data_empty(self, data: dict) -> bool:
-        if data.get("admins") or data.get("moderators"):
+        if data.get("admins") or data.get("trusted_users") or data.get("moderators"):
             return False
         return not any(data.get(key) for key in ("verified_users", "blacklisted", "whitelisted", "reaction_roles", "command_overrides", "autokick"))
 
@@ -1322,6 +1567,8 @@ class AuthCog(commands.Cog, name="Auth"):
         migrated = _default_auth_data()
 
         migrated["admins"] = _normalize_int_list(raw.get("admins", []))
+        migrated["trusted_users"] = _normalize_int_list(
+            raw.get("trusted_users", []))
         migrated["moderators"] = _normalize_int_list(raw.get("moderators", []))
         migrated["verified_users"] = self._normalize_guild_list_map(
             raw.get("verified_users", {}))
@@ -1530,6 +1777,18 @@ class AuthCog(commands.Cog, name="Auth"):
         """Check if user is bot admin."""
         return user_id in self.auth_data["admins"] or self.is_owner(user_id)
 
+    def is_trusted_user(self, user_id: int) -> bool:
+        """Check if user is in the trusted bot-user list."""
+        return user_id in self.auth_data.get("trusted_users", [])
+
+    def can_use_locked_mode(self, guild: discord.Guild, user_id: int) -> bool:
+        """Check whether a user may use the bot while !me / !onlyme is active."""
+        return (
+            user_id == self.only_me_user_id
+            or self.is_admin(user_id)
+            or self.is_trusted_user(user_id)
+        )
+
     def is_moderator(self, user_id: int) -> bool:
         """Check if user is moderator."""
         return user_id in self.auth_data["moderators"] or self.is_admin(user_id)
@@ -1644,6 +1903,8 @@ class AuthCog(commands.Cog, name="Auth"):
             levels.append("👑 Bot Owner")
         if self.is_admin(user_id):
             levels.append("⚔️ Bot Admin")
+        if self.is_trusted_user(user_id):
+            levels.append("✨ Trusted User")
         if self.is_moderator(user_id):
             levels.append("🛡️ Bot Moderator")
         if self.is_verified(ctx.guild.id, user_id):
@@ -1730,6 +1991,97 @@ class AuthCog(commands.Cog, name="Auth"):
             color=discord.Color.gold()
         )
         await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="addtrusted", aliases=["trustuser", "allowuser"])
+    async def add_trusted_user(self, ctx, member: discord.Member):
+        """Add a trusted user who can still use the bot during !me / !onlyme."""
+        if not self.is_admin(ctx.author.id):
+            embed = discord.Embed(
+                title="❌ Access Denied",
+                description="Only bot admins can add trusted users.",
+                color=discord.Color.red(),
+            )
+            return await ctx.send(embed=embed)
+
+        self.auth_data.setdefault("trusted_users", [])
+        if member.id not in self.auth_data["trusted_users"]:
+            self.auth_data["trusted_users"].append(member.id)
+            self._save_auth_data()
+            embed = discord.Embed(
+                title="✨ Trusted User Added",
+                description=f"{member.mention} can now use the bot during `!me` and `!onlyme` lock mode.",
+                color=discord.Color.blue(),
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send(f"ℹ️ **{member.display_name}** is already a trusted user.")
+
+    @commands.hybrid_command(name="removetrusted", aliases=["untrustuser", "unallowuser"])
+    async def remove_trusted_user(self, ctx, member: discord.Member):
+        """Remove a trusted user from the lock-bypass list."""
+        if not self.is_admin(ctx.author.id):
+            embed = discord.Embed(
+                title="❌ Access Denied",
+                description="Only bot admins can remove trusted users.",
+                color=discord.Color.red(),
+            )
+            return await ctx.send(embed=embed)
+
+        trusted_users = self.auth_data.setdefault("trusted_users", [])
+        if member.id in trusted_users:
+            trusted_users.remove(member.id)
+            self._save_auth_data()
+            embed = discord.Embed(
+                title="🗑️ Trusted User Removed",
+                description=f"{member.mention} is no longer allowed to bypass `!me` / `!onlyme` lock mode.",
+                color=discord.Color.orange(),
+            )
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send(f"ℹ️ **{member.display_name}** is not a trusted user.")
+
+    @commands.hybrid_command(name="listtrusted", aliases=["trustedusers", "allowedusers"])
+    async def list_trusted_users(self, ctx):
+        """List all trusted users."""
+        if not self.is_admin(ctx.author.id):
+            return await ctx.send("❌ Only bot admins can view trusted users.")
+
+        trusted_users = self.auth_data.get("trusted_users", [])
+        if not trusted_users:
+            return await ctx.send("ℹ️ No trusted users set.")
+
+        trusted_list = []
+        for user_id in trusted_users:
+            user = self.bot.get_user(user_id)
+            if user:
+                trusted_list.append(f"• {user.mention} (`{user_id}`)")
+            else:
+                trusted_list.append(f"• Unknown (`{user_id}`)")
+
+        embed = discord.Embed(
+            title="✨ Trusted Users",
+            description="\n".join(trusted_list),
+            color=discord.Color.blue(),
+        )
+        embed.set_footer(
+            text="Trusted users are not admins. They only bypass !me / !onlyme lock mode.")
+        await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="trusted")
+    async def trusted_manager(self, ctx):
+        """Open the trusted-user manager GUI."""
+        if not self.is_admin(ctx.author.id):
+            if ctx.interaction is not None:
+                return await ctx.send("❌ Only bot admins can manage trusted users.", ephemeral=True)
+            return await ctx.send("❌ Only bot admins can manage trusted users.")
+
+        view = TrustedUserManagerView(self, ctx, timeout=180)
+        embed = view.build_embed()
+        kwargs = {"embed": embed, "view": view}
+        if ctx.interaction is not None:
+            kwargs["ephemeral"] = True
+        await ctx.send(**kwargs)
 
     # --- Moderator Management ---
 
@@ -2336,6 +2688,8 @@ class AuthCog(commands.Cog, name="Auth"):
                   "!verify @user - Verify user\n"
                   "!blacklist @user - Block user\n"
                   "!whitelist @user - Whitelist user\n"
+                  "!trusted - Open trusted-user GUI\n"
+                  "!addtrusted @user - Allow lock bypass\n"
                   "!addadmin @user - Add admin\n"
                   "!addmod @user - Add moderator\n"
                   "```",
@@ -2590,6 +2944,7 @@ class AuthCog(commands.Cog, name="Auth"):
             self.auth_data["verified_users"].get(guild_key, []))
         whitelisted_count = len(
             self.auth_data["whitelisted"].get(guild_key, []))
+        trusted_count = len(self.auth_data.get("trusted_users", []))
 
         embed = discord.Embed(
             title="🔐 Auth System Status",
@@ -2600,6 +2955,8 @@ class AuthCog(commands.Cog, name="Auth"):
             name="👑 Bot Owner", value=f"<@{self.owner_id}>" if self.owner_id else "Not set", inline=True)
         embed.add_field(name="⚔️ Admins", value=str(
             len(self.auth_data["admins"])), inline=True)
+        embed.add_field(name="✨ Trusted", value=str(
+            trusted_count), inline=True)
         embed.add_field(name="🛡️ Moderators", value=str(
             len(self.auth_data["moderators"])), inline=True)
         embed.add_field(name="✅ Verified (this server)",
@@ -2622,7 +2979,8 @@ class AuthCog(commands.Cog, name="Auth"):
             return await ctx.send("❌ Only bot admins or the server owner can enable `!onlyme`.")
 
         self.only_me_user_id = ctx.author.id
-        await ctx.send(f"🔒 Text AI mode locked to {ctx.author.mention}.")
+        await ctx.send(
+            f"🔒 Text AI mode locked to {ctx.author.mention}. Bot admins and trusted users can still use the bot.")
 
     @commands.command(name="me")
     async def me_mode(self, ctx):
@@ -2633,7 +2991,8 @@ class AuthCog(commands.Cog, name="Auth"):
             return await ctx.send("❌ Only the configured user, bot admins, or server owner can enable `!me`.")
 
         self.only_me_user_id = self.me_lock_user_id
-        await ctx.send(f"🔒 Command lock enabled. Only <@{self.only_me_user_id}> and bot admins can use commands.")
+        await ctx.send(
+            f"🔒 Command lock enabled. Only <@{self.only_me_user_id}>, bot admins, and trusted users can use commands.")
 
     @commands.command(name="mangaonlyme", aliases=["onlymanga", "mangalock"])
     async def manga_only_me_mode(self, ctx):
@@ -2644,7 +3003,8 @@ class AuthCog(commands.Cog, name="Auth"):
             return await ctx.send("❌ Only bot admins or the server owner can enable `!mangaonlyme`.")
 
         self.only_me_user_id = ctx.author.id
-        await ctx.send(f"🔒 Manga mode locked to {ctx.author.mention}.")
+        await ctx.send(
+            f"🔒 Manga mode locked to {ctx.author.mention}. Bot admins and trusted users can still use the bot.")
 
     @commands.command(name="openall", aliases=["exit"])
     async def open_all_mode(self, ctx):
@@ -2749,21 +3109,21 @@ class AuthCog(commands.Cog, name="Auth"):
         # 1. Check blacklist
         guild_id = ctx.guild.id if ctx.guild else None
         if self.is_blacklisted(ctx.author.id, guild_id):
-            await ctx.send("go talk to banka")
+            await ctx.send("go talk to banka to give u permission")
             return False
 
         # 2. Check only_me mode
         if self.only_me_user_id is not None:
-            is_lock_owner = ctx.author.id == self.only_me_user_id
-            is_bot_admin = self.is_admin(ctx.author.id)
             is_server_owner = bool(
                 ctx.guild and ctx.author.id == ctx.guild.owner_id)
 
             # Always allow unlocking from the unlock command.
-            if cmd_name in unlock_commands and (is_lock_owner or is_bot_admin or is_server_owner):
+            if cmd_name in unlock_commands and (
+                self.can_use_locked_mode(ctx.guild, ctx.author.id) or is_server_owner
+            ):
                 return True
 
-            if not (is_lock_owner or is_bot_admin):
+            if not self.can_use_locked_mode(ctx.guild, ctx.author.id):
                 await ctx.send("go talk to banka to give u permission")
                 return False
 
@@ -2949,27 +3309,27 @@ def setup_global_check(bot, auth_cog):
 
         # 1. Check only_me mode
         if auth_cog.only_me_user_id is not None:
-            is_lock_owner = ctx.author.id == auth_cog.only_me_user_id
-            is_bot_admin = auth_cog.is_admin(ctx.author.id)
             is_server_owner = bool(
                 ctx.guild and ctx.author.id == ctx.guild.owner_id)
 
-            if cmd_name in unlock_commands and (is_lock_owner or is_bot_admin or is_server_owner):
+            if cmd_name in unlock_commands and (
+                auth_cog.can_use_locked_mode(ctx.guild, ctx.author.id) or is_server_owner
+            ):
                 return True
 
-            if not (is_lock_owner or is_bot_admin):
-                await ctx.send("go talk to banka")
+            if not auth_cog.can_use_locked_mode(ctx.guild, ctx.author.id):
+                await ctx.send("go talk to banka to give u permission")
                 return False
 
         # 2. Check blacklist
         guild_id = ctx.guild.id if ctx.guild else None
         if auth_cog.is_blacklisted(ctx.author.id, guild_id):
-            await ctx.send("go talk to banka")
+            await ctx.send("go talk to banka to give u permission")
             return False
 
         # 3. Check dynamic overrides
         if not auth_cog.check_command_permission(ctx):
-            await ctx.send("go talk to banka")
+            await ctx.send("go talk to banka to give u permission")
             return False
 
         return True

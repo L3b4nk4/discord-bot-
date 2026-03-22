@@ -3,6 +3,7 @@ Admin Commands Cog - Moderation and admin commands.
 """
 import discord
 from discord.ext import commands
+from discord import app_commands
 from datetime import timedelta
 import os
 import re
@@ -20,10 +21,46 @@ class AdminCog(commands.Cog, name="Admin"):
 
     def __init__(self, bot):
         self.bot = bot
+
+    def _auth_cog(self):
+        return self.bot.get_cog("Auth") or self.bot.get_cog("AuthCog")
+
+    def _is_bot_admin(self, user_id: int) -> bool:
+        auth = self._auth_cog()
+        if not auth:
+            return False
+        try:
+            return bool(auth.is_admin(user_id))
+        except Exception:
+            return False
+
+    async def cog_check(self, ctx):
+        """Require bot admin access for all admin prefix commands."""
+        if self._is_bot_admin(ctx.author.id):
+            return True
+        await ctx.send("❌ Only bot admins can use admin commands.")
+        return False
+
+    async def cog_app_command_check(self, interaction: discord.Interaction) -> bool:
+        """Require bot admin access for all admin slash commands."""
+        if self._is_bot_admin(interaction.user.id):
+            return True
+
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                "❌ Only bot admins can use admin commands.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                "❌ Only bot admins can use admin commands.",
+                ephemeral=True,
+            )
+        return False
     
     # --- DM ---
     
-    @commands.command(name="dm")
+    @commands.hybrid_command(name="dm")
     @commands.has_permissions(manage_messages=True)
     async def dm(self, ctx, member: discord.Member, *, text: str):
         """Send a DM to a user."""
@@ -52,7 +89,7 @@ class AdminCog(commands.Cog, name="Admin"):
     
     # --- Voice Moderation ---
     
-    @commands.command(name="kick")
+    @commands.hybrid_command(name="kick")
     @commands.has_permissions(move_members=True)
     async def kick_voice(self, ctx, member: discord.Member):
         """Kick a user from voice channel."""
@@ -68,9 +105,9 @@ class AdminCog(commands.Cog, name="Admin"):
         embed.set_thumbnail(url=member.display_avatar.url)
         await ctx.send(embed=embed)
     
-    @commands.command(name="move")
+    @commands.hybrid_command(name="move")
     @commands.has_permissions(move_members=True)
-    async def move(self, ctx, member: discord.Member, *, channel: discord.VoiceChannel):
+    async def move(self, ctx, member: discord.Member, channel: discord.VoiceChannel):
         """Move a user to another voice channel."""
         if not member.voice:
             return await ctx.send(embed=discord.Embed(description="❌ User is not in a voice channel.", color=discord.Color.red()))
@@ -83,7 +120,7 @@ class AdminCog(commands.Cog, name="Admin"):
         )
         await ctx.send(embed=embed)
     
-    @commands.command(name="mute")
+    @commands.hybrid_command(name="mute")
     @commands.has_permissions(mute_members=True)
     async def mute(self, ctx, member: discord.Member):
         """Mute a user in voice."""
@@ -99,7 +136,7 @@ class AdminCog(commands.Cog, name="Admin"):
         embed.set_thumbnail(url=member.display_avatar.url)
         await ctx.send(embed=embed)
     
-    @commands.command(name="unmute")
+    @commands.hybrid_command(name="unmute")
     @commands.has_permissions(mute_members=True)
     async def unmute(self, ctx, member: discord.Member):
         """Unmute a user in voice."""
@@ -115,7 +152,7 @@ class AdminCog(commands.Cog, name="Admin"):
         embed.set_thumbnail(url=member.display_avatar.url)
         await ctx.send(embed=embed)
     
-    @commands.command(name="muteall")
+    @commands.hybrid_command(name="muteall")
     @commands.has_permissions(mute_members=True)
     async def muteall(self, ctx):
         """Mute everyone in your voice channel."""
@@ -137,7 +174,7 @@ class AdminCog(commands.Cog, name="Admin"):
             color=discord.Color.red()
         ))
     
-    @commands.command(name="unmuteall")
+    @commands.hybrid_command(name="unmuteall")
     @commands.has_permissions(mute_members=True)
     async def unmuteall(self, ctx):
         """Unmute everyone in your voice channel."""
@@ -158,7 +195,7 @@ class AdminCog(commands.Cog, name="Admin"):
             color=discord.Color.green()
         ))
     
-    @commands.command(name="deafen")
+    @commands.hybrid_command(name="deafen")
     @commands.has_permissions(deafen_members=True)
     async def deafen(self, ctx, member: discord.Member):
         """Deafen a user in voice."""
@@ -174,7 +211,7 @@ class AdminCog(commands.Cog, name="Admin"):
         embed.set_thumbnail(url=member.display_avatar.url)
         await ctx.send(embed=embed)
     
-    @commands.command(name="undeafen")
+    @commands.hybrid_command(name="undeafen")
     @commands.has_permissions(deafen_members=True)
     async def undeafen(self, ctx, member: discord.Member):
         """Undeafen a user in voice."""
@@ -192,7 +229,7 @@ class AdminCog(commands.Cog, name="Admin"):
     
     # --- Timeout ---
     
-    @commands.command(name="timeout")
+    @commands.hybrid_command(name="timeout")
     @commands.has_permissions(moderate_members=True)
     async def timeout(self, ctx, member: discord.Member, minutes: int = 5):
         """Timeout a user."""
@@ -206,7 +243,7 @@ class AdminCog(commands.Cog, name="Admin"):
         embed.set_thumbnail(url=member.display_avatar.url)
         await ctx.send(embed=embed)
     
-    @commands.command(name="untimeout")
+    @commands.hybrid_command(name="untimeout")
     @commands.has_permissions(moderate_members=True)
     async def untimeout(self, ctx, member: discord.Member):
         """Remove timeout from a user."""
@@ -221,7 +258,7 @@ class AdminCog(commands.Cog, name="Admin"):
     
     # --- Ban ---
     
-    @commands.command(name="ban")
+    @commands.hybrid_command(name="ban")
     @commands.has_permissions(ban_members=True)
     async def ban(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
         """Ban a user."""
@@ -235,7 +272,7 @@ class AdminCog(commands.Cog, name="Admin"):
         embed.set_thumbnail(url=member.display_avatar.url)
         await ctx.send(embed=embed)
     
-    @commands.command(name="unban")
+    @commands.hybrid_command(name="unban")
     @commands.has_permissions(ban_members=True)
     async def unban(self, ctx, *, user_id_or_name: str):
         """Unban a user by ID or name."""
@@ -257,7 +294,7 @@ class AdminCog(commands.Cog, name="Admin"):
     
     # --- Message Management ---
     
-    @commands.command(name="clear", aliases=["purge"])
+    @commands.hybrid_command(name="clear", aliases=["purge"])
     @commands.has_permissions(manage_messages=True)
     async def clear(self, ctx, amount: int = 5):
         """Clear messages from channel."""
@@ -275,7 +312,7 @@ class AdminCog(commands.Cog, name="Admin"):
     
     # --- Role Management ---
     
-    @commands.command(name="addrole")
+    @commands.hybrid_command(name="addrole")
     @commands.has_permissions(manage_roles=True)
     async def addrole(self, ctx, member: discord.Member, role: discord.Role):
         """Add a role to a user."""
@@ -290,7 +327,7 @@ class AdminCog(commands.Cog, name="Admin"):
         )
         await ctx.send(embed=embed)
     
-    @commands.command(name="removerole")
+    @commands.hybrid_command(name="removerole")
     @commands.has_permissions(manage_roles=True)
     async def removerole(self, ctx, member: discord.Member, role: discord.Role):
         """Remove a role from a user."""
@@ -305,7 +342,7 @@ class AdminCog(commands.Cog, name="Admin"):
         )
         await ctx.send(embed=embed)
 
-    @commands.command(name="addcategory", aliases=["makecategory", "createcategory", "catadd"])
+    @commands.hybrid_command(name="addcategory", aliases=["makecategory", "createcategory", "catadd"])
     @commands.has_permissions(manage_channels=True)
     async def add_category(self, ctx, *, spec: str):
         """
@@ -383,7 +420,7 @@ class AdminCog(commands.Cog, name="Admin"):
         await ctx.send(embed=embed)
 
 
-    @commands.command(name="setlimit")
+    @commands.hybrid_command(name="setlimit")
     @commands.has_permissions(manage_guild=True)
     async def setlimit(self, ctx, key: str = None, value: int = None):
         """Change command limits."""
@@ -401,7 +438,7 @@ class AdminCog(commands.Cog, name="Admin"):
         self.LIMITS[key] = value
         await ctx.send(f"✅ Set `{key}` to **{value}**")
 
-    @commands.command(name="sync")
+    @commands.hybrid_command(name="sync")
     async def sync(self, ctx):
         """Sync slash commands (Owner only)."""
         auth = self.bot.get_cog("Auth") or self.bot.get_cog("AuthCog")
@@ -412,7 +449,7 @@ class AdminCog(commands.Cog, name="Admin"):
              synced = await self.bot.tree.sync()
              await ctx.send(f"✅ Synced {len(synced)} slash commands.")
 
-    @commands.command(name="debugkeys")
+    @commands.hybrid_command(name="debugkeys")
     async def debug_keys(self, ctx):
         """Check if API keys are loaded (Owner only)."""
         auth = self.bot.get_cog("Auth") or self.bot.get_cog("AuthCog")
@@ -430,7 +467,7 @@ class AdminCog(commands.Cog, name="Admin"):
         
         await ctx.send("🔑 **API Key Status**\n" + "\n".join(status))
 
-    @commands.command(name="voicediag")
+    @commands.hybrid_command(name="voicediag")
     @commands.has_permissions(manage_guild=True)
     async def voicediag(self, ctx):
         """Voice diagnostics for debugging."""

@@ -12,6 +12,7 @@ import discord.opus
 from discord.ext import commands
 import os
 import re
+import time
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -79,6 +80,11 @@ class MangaBot(commands.Bot):
             for name in os.getenv("LOG_AUTO_DELETE_CHANNELS", "manga-logs,logs").split(",")
             if name.strip()
         }
+        self.ai_conversations = {}
+        self.ai_conversation_ttl = max(
+            60, int(os.getenv("AI_CONVERSATION_TTL", "1800")))
+        self.ai_conversation_max_turns = max(
+            4, int(os.getenv("AI_CONVERSATION_MAX_TURNS", "12")))
 
         # Initialize services
         print("📦 Initializing services...")
@@ -96,6 +102,142 @@ class MangaBot(commands.Bot):
         )
 
         print("✅ Services initialized")
+
+    def _strip_bot_mention(self, text: str) -> str:
+        if not self.user:
+            return (text or "").strip()
+        return re.sub(
+            rf"<@!?{self.user.id}>", "", text or "").strip()
+
+    def _conversation_key(self, channel_id: int, user_id: int) -> str:
+        return f"{channel_id}:{user_id}"
+
+    def get_cached_ai_history(self, channel_id: int, user_id: int):
+        entry = self.ai_conversations.get(self._conversation_key(channel_id, user_id))
+        if not entry:
+            return []
+
+        if time.monotonic() - entry.get("updated_at", 0) > self.ai_conversation_ttl:
+            self.ai_conversations.pop(self._conversation_key(channel_id, user_id), None)
+            return []
+
+        history = entry.get("history", [])
+        if not isinstance(history, list):
+            return []
+        return [dict(item) for item in history[-self.ai_conversation_max_turns:]]
+
+    def remember_ai_exchange(self, message: discord.Message, user_text: str, bot_text: str, base_history=None):
+        if not message or not getattr(message, "channel", None):
+            return
+
+        history = []
+        for item in (base_history or []):
+            if not isinstance(item, dict):
+                continue
+            content = (item.get("content") or "").strip()
+            if not content:
+                continue
+            history.append({
+                "role": str(item.get("role", "user")).strip().lower(),
+                "name": str(item.get("name", "")).strip(),
+                "content": content,
+            })
+
+        clean_user_text = (user_text or "").strip()
+        if clean_user_text:
+            history.append({
+                "role": "user",
+                "name": message.author.display_name,
+                "content": clean_user_text,
+            })
+
+        clean_bot_text = (bot_text or "").strip()
+        if clean_bot_text:
+            history.append({
+                "role": "assistant",
+                "name": self.user.name if self.user else "Manga",
+                "content": clean_bot_text,
+            })
+
+        history = history[-self.ai_conversation_max_turns:]
+        self.ai_conversations[self._conversation_key(message.channel.id, message.author.id)] = {
+            "updated_at": time.monotonic(),
+            "history": history,
+        }
+
+    async def _resolve_referenced_message(self, message: discord.Message):
+        reference = getattr(message, "reference", None)
+        if not reference or not reference.message_id:
+            return None
+
+        resolved = getattr(reference, "resolved", None)
+        if isinstance(resolved, discord.Message):
+            return resolved
+
+        channel = getattr(message, "channel", None)
+        if not channel or not hasattr(channel, "fetch_message"):
+            return None
+
+        try:
+            return await channel.fetch_message(reference.message_id)
+        except Exception:
+            return None
+
+    def _message_text_for_ai(self, message: discord.Message, *, strip_bot_mention: bool = False) -> str:
+        content = (message.content or "").strip()
+        if strip_bot_mention:
+            content = self._strip_bot_mention(content)
+        return content
+
+    async def build_ai_reply_history(self, message: discord.Message, limit: int = 8):
+        """Build reply-chain history for user<->bot conversations only."""
+        if not message or not self.user or not message.reference:
+            return []
+
+        chain = []
+        cursor = message
+        seen = {message.id}
+
+        while len(chain) < limit:
+            parent = await self._resolve_referenced_message(cursor)
+            if not parent or parent.id in seen:
+                break
+            seen.add(parent.id)
+            chain.append(parent)
+            if not parent.reference:
+                break
+            cursor = parent
+
+        chain.reverse()
+
+        history = []
+        has_bot_turn = False
+        for item in chain:
+            if item.author.id == self.user.id:
+                has_bot_turn = True
+                role = "assistant"
+                name = self.user.name
+                content = self._message_text_for_ai(item)
+            elif item.author.id == message.author.id:
+                role = "user"
+                name = item.author.display_name
+                content = self._message_text_for_ai(item, strip_bot_mention=True)
+            else:
+                # Keep reply-context limited to a single user talking to the bot.
+                return []
+
+            if not content:
+                continue
+
+            history.append({
+                "role": role,
+                "name": name,
+                "content": content,
+            })
+
+        if not has_bot_turn:
+            return []
+        return history
 
     async def setup_hook(self):
         """Called when bot is starting up - load cogs."""
@@ -148,12 +290,37 @@ class MangaBot(commands.Bot):
             return
 
         mentioned = self.user.mentioned_in(message)
+        reply_history = []
+        if not message.content.startswith("!"):
+            try:
+                reply_history = await self.build_ai_reply_history(message)
+            except Exception as e:
+                print(f"⚠️ Failed to build reply history: {e}")
+                reply_history = []
+        cached_history = []
+        if not reply_history and not message.content.startswith("!"):
+            try:
+                cached_history = self.get_cached_ai_history(
+                    message.channel.id, message.author.id)
+            except Exception as e:
+                print(f"⚠️ Failed to read cached AI history: {e}")
+                cached_history = []
+        conversation_history = reply_history or cached_history
+        is_reply_continuation = bool(reply_history)
         auth_cog = self.get_cog("Auth") or self.get_cog("AuthCog")
         only_me_user_id = getattr(
             auth_cog, "only_me_user_id", None) if auth_cog else None
         is_onlyme_allowed = True
         if only_me_user_id is not None:
-            is_onlyme_allowed = message.author.id == only_me_user_id
+            if auth_cog and hasattr(auth_cog, "can_use_locked_mode"):
+                try:
+                    is_onlyme_allowed = bool(
+                        auth_cog.can_use_locked_mode(message.guild, message.author.id)
+                    )
+                except Exception:
+                    is_onlyme_allowed = message.author.id == only_me_user_id
+            else:
+                is_onlyme_allowed = message.author.id == only_me_user_id
 
         # Natural assistant actions are mention-only.
         if mentioned and is_onlyme_allowed:
@@ -170,19 +337,25 @@ class MangaBot(commands.Bot):
         await self.process_commands(message)
 
         # Respond when mentioned (if not a command)
-        if mentioned and not message.content.startswith("!"):
+        if (mentioned or is_reply_continuation) and not message.content.startswith("!"):
             if not is_onlyme_allowed:
                 return
-            clean_text = re.sub(
-                rf"<@!?{self.user.id}>", "", message.content or "").strip()
+            clean_text = self._strip_bot_mention(message.content)
 
             if clean_text and self.ai_service.enabled:
                 async with message.channel.typing():
                     response = await self.ai_service.chat_response(
                         message.author.display_name,
-                        clean_text
+                        clean_text,
+                        history=conversation_history,
                     )
-                    await message.reply(response)
+                    self.remember_ai_exchange(
+                        message,
+                        clean_text,
+                        response,
+                        base_history=conversation_history,
+                    )
+                    await message.reply(response, mention_author=False)
             elif clean_text:
                 await message.reply(
                     "❌ AI is not configured. Set `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, or `GROQ_API_KEY`.",

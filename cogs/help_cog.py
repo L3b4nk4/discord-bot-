@@ -53,7 +53,7 @@ class BackButton(ui.Button):
         self.ctx = ctx
 
     async def callback(self, interaction: discord.Interaction):
-        await show_main_menu(interaction, self.bot, self.ctx)
+        await show_main_menu(interaction, self.bot, self.ctx, edit=True)
 
 class CommandSelect(ui.Select):
     """Dropdown to select a specific command from a category."""

@@ -570,9 +570,14 @@ class AgentCog(commands.Cog, name="Agent"):
             command_catalog = self._build_command_catalog()
             catalog_text = "\n".join(command_catalog)
             enriched_prompt = (
-                "You are Manga, a Discord bot.\n"
-                "Answer based on your real capabilities below.\n"
-                "If user asks for an unsupported action, say exactly what command/action they should use.\n"
+                "You are Manga, a Discord bot assistant replying inside a server.\n"
+                "Answer only from your real capabilities below.\n"
+                "Rules:\n"
+                "- Never invent commands, permissions, actions, or moderation outcomes.\n"
+                "- If a listed command fits, mention the exact command syntax.\n"
+                "- If the action is unsupported, say that briefly and suggest the closest supported command.\n"
+                "- Keep the reply short, practical, and clear.\n"
+                f"Guild: {message.guild.name}\n"
                 f"Known commands:\n{catalog_text}\n\n"
                 f"User ({message.author.display_name}) says: {prompt}"
             )

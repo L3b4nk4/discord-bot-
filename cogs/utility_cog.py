@@ -43,7 +43,34 @@ class UtilityCog(commands.Cog, name="Utility"):
             return await ctx.send("❌ AI is not available.")
         
         async with ctx.typing():
-            response = await self.ai.chat_response(ctx.author.display_name, text)
+            history = []
+            if hasattr(self.bot, "build_ai_reply_history"):
+                try:
+                    history = await self.bot.build_ai_reply_history(ctx.message)
+                except Exception:
+                    history = []
+            if not history and hasattr(self.bot, "get_cached_ai_history"):
+                try:
+                    history = self.bot.get_cached_ai_history(
+                        ctx.channel.id, ctx.author.id)
+                except Exception:
+                    history = []
+
+            response = await self.ai.chat_response(
+                ctx.author.display_name,
+                text,
+                history=history,
+            )
+            if hasattr(self.bot, "remember_ai_exchange"):
+                try:
+                    self.bot.remember_ai_exchange(
+                        ctx.message,
+                        text,
+                        response,
+                        base_history=history,
+                    )
+                except Exception:
+                    pass
             await ctx.reply(response)
     
     @commands.command(name="translate")
