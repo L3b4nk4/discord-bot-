@@ -7,6 +7,7 @@ from discord import app_commands
 from datetime import timedelta
 import os
 import re
+from typing import Literal
 
 
 class AdminCog(commands.Cog, name="Admin"):
@@ -439,28 +440,39 @@ class AdminCog(commands.Cog, name="Admin"):
         await ctx.send(f"✅ Set `{key}` to **{value}**")
 
     @commands.hybrid_command(name="sync")
-    async def sync(self, ctx):
+    async def sync(self, ctx, scope: Literal["global", "guild"] = "global"):
         """Sync slash commands (Owner only)."""
         auth = self.bot.get_cog("Auth") or self.bot.get_cog("AuthCog")
         if not auth or not auth.is_owner(ctx.author.id):
              return await ctx.send("❌ Access Denied.")
-        
-        async with ctx.typing():
-             global_synced = await self.bot.tree.sync()
 
-             if ctx.guild is not None:
+        async with ctx.typing():
+             scope = (scope or "global").lower()
+
+             if scope == "guild":
+                 if ctx.guild is None:
+                     return await ctx.send("❌ Guild sync can only be used inside a server.")
+
+                 self.bot.tree.clear_commands(guild=ctx.guild)
                  self.bot.tree.copy_global_to(guild=ctx.guild)
                  guild_synced = await self.bot.tree.sync(guild=ctx.guild)
-                 await ctx.send(
-                     f"✅ Synced {len(global_synced)} global slash commands.\n"
+                 return await ctx.send(
                      f"✅ Synced {len(guild_synced)} guild slash commands for **{ctx.guild.name}**.\n"
-                     "Guild sync updates immediately. Global sync can take a while to appear."
+                     "This updates immediately, but it can appear twice if the same commands also exist globally."
                  )
-             else:
-                 await ctx.send(
-                     f"✅ Synced {len(global_synced)} global slash commands.\n"
-                     "Global sync can take a while to appear in Discord."
-                 )
+
+             global_synced = await self.bot.tree.sync()
+
+             cleared_guilds = 0
+             for guild in self.bot.guilds:
+                 self.bot.tree.clear_commands(guild=guild)
+                 await self.bot.tree.sync(guild=guild)
+                 cleared_guilds += 1
+
+             await ctx.send(
+                 f"✅ Synced {len(global_synced)} global slash commands.\n"
+                 f"🧹 Cleared guild-only duplicate copies in {cleared_guilds} server(s)."
+             )
 
     @commands.hybrid_command(name="debugkeys")
     async def debug_keys(self, ctx):
